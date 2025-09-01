@@ -10,6 +10,16 @@ Export Microsoft Teams chat conversations to TXT, JSON, HTML, or CSV using the M
 - Handles pagination to retrieve all messages
 - Cross-platform with PowerShell 7+
 
+## What this script is useful for
+- AI analysis and summarization: Export JSON/CSV/HTML to feed LLMs, RAG pipelines, or analytics tooling.
+- Archiving and record-keeping: Store chat history as flat files for backup or team knowledge bases.
+- Legal/reference copies: Produce human-readable transcripts for internal reviews and audits.
+
+Note/Disclaimer:
+- Not legal advice.
+- Not an eDiscovery solution; no cryptographic checksums, digital signatures, audit trail, or chain of custody.
+- Files can be altered. For tamper-evident or evidentiary needs, consider Microsoft 365 Purview eDiscovery or implement hashing/signing and controlled storage.
+
 ## Requirements
 - PowerShell 7+
 - Microsoft Graph application permissions with admin consent:
