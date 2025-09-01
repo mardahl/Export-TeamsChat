@@ -532,7 +532,7 @@ function Get-SecureInput {
 # Function to run interactive mode
 function Start-InteractiveMode {
     Write-Host "`n🚀 Microsoft Teams Chat Exporter - Interactive Mode" -ForegroundColor Cyan
-    Write-Host "=" * 60 -ForegroundColor Cyan
+    Write-Host ("=" * 60) -ForegroundColor Cyan
     
     Write-Host "`n📋 Microsoft Entra ID app registration setup required:" -ForegroundColor Yellow
     Write-Host "1. Go to Microsoft Entra admin center → App registrations"
@@ -572,7 +572,7 @@ function Start-InteractiveMode {
 # Main execution logic
 function Start-TeamsExport {
     Write-Host "`n🗨️ Microsoft Teams Chat Exporter" -ForegroundColor Cyan
-    Write-Host "=" * 50 -ForegroundColor Cyan
+    Write-Host ("=" * 50) -ForegroundColor Cyan
     
     # Handle configuration file creation
     if ($ConfigFile) {
