@@ -61,6 +61,7 @@ Version: 1.0.0
 Last Updated: 2025-09-01
 LLM: ChatGPT 5 and Claude 4
 Work: Consultant for hire via inciro.com
+License: Prosperity Public License 3.0.0 (noncommercial + 30-day commercial trial). Commercial licensing and consulting: https://inciro.com
 
 Requirements:
 - PowerShell 7+
@@ -75,6 +76,8 @@ https://learn.microsoft.com/graph/api/resources/chatmessage?view=graph-rest-1.0
 https://learn.microsoft.com/graph/permissions-reference
 .LINK
 https://github.com/mardahl
+.LINK
+https://prosperitylicense.com/versions/3.0.0
 #>
 
 #requires -Version 7.0
