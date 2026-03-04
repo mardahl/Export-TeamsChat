@@ -583,14 +583,14 @@ function Start-TeamsExport {
     # Load configuration from file if exists
     $config = Get-Configuration
     
-    # Use parameters or config file values or interactive mode
-    if ($Interactive -or (-not $TenantId -and -not $config)) {
+    # Resolve credentials: parameters take precedence over config file values
+    $script:TenantId     = if (-not [string]::IsNullOrEmpty($TenantId))     { $TenantId }     elseif ($config) { $config.TenantId }     else { $null }
+    $script:ClientId     = if (-not [string]::IsNullOrEmpty($ClientId))     { $ClientId }     elseif ($config) { $config.ClientId }     else { $null }
+    $script:ClientSecret = if (-not [string]::IsNullOrEmpty($ClientSecret)) { $ClientSecret } elseif ($config) { $config.ClientSecret } else { $null }
+
+    # Use interactive mode if explicitly requested or if any required credential is still missing
+    if ($Interactive -or [string]::IsNullOrEmpty($script:TenantId) -or [string]::IsNullOrEmpty($script:ClientId) -or [string]::IsNullOrEmpty($script:ClientSecret)) {
         Start-InteractiveMode
-    }
-    else {
-        $script:TenantId = $TenantId ?? $config.TenantId
-        $script:ClientId = $ClientId ?? $config.ClientId
-        $script:ClientSecret = $ClientSecret ?? $config.ClientSecret
     }
     
     # Validate required parameters
