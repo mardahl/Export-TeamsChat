@@ -592,6 +592,9 @@ function Start-TeamsExport {
         $script:ClientId = $ClientId ?? $config.ClientId
         $script:ClientSecret = $ClientSecret ?? $config.ClientSecret
     }
+
+    $script:ExportFormat = $script:ExportFormat ?? $ExportFormat
+    $script:OutputPath = $script:OutputPath ?? $OutputPath
     
     # Validate required parameters
     if (-not $script:TenantId -or -not $script:ClientId -or -not $script:ClientSecret) {
@@ -631,13 +634,13 @@ function Start-TeamsExport {
         $messages = Get-AllChatMessages -ChatId $chatId -AccessToken $accessToken
         
         # Export based on format
-        Write-Host "`n📤 Exporting to $ExportFormat format..." -ForegroundColor Cyan
+        Write-Host "`n📤 Exporting to $script:ExportFormat format..." -ForegroundColor Cyan
         
-        $exportedFile = switch ($ExportFormat.ToUpper()) {
-            "TXT" { Export-ToText -ChatData $chatData -Messages $messages -OutputPath $OutputPath }
-            "JSON" { Export-ToJSON -ChatData $chatData -Messages $messages -OutputPath $OutputPath }
-            "HTML" { Export-ToHTML -ChatData $chatData -Messages $messages -OutputPath $OutputPath }
-            "CSV" { Export-ToCSV -ChatData $chatData -Messages $messages -OutputPath $OutputPath }
+        $exportedFile = switch ($script:ExportFormat.ToUpper()) {
+            "TXT" { Export-ToText -ChatData $chatData -Messages $messages -OutputPath $script:OutputPath }
+            "JSON" { Export-ToJSON -ChatData $chatData -Messages $messages -OutputPath $script:OutputPath }
+            "HTML" { Export-ToHTML -ChatData $chatData -Messages $messages -OutputPath $script:OutputPath }
+            "CSV" { Export-ToCSV -ChatData $chatData -Messages $messages -OutputPath $script:OutputPath }
         }
         
         Write-Host "`n🎉 Export completed successfully!" -ForegroundColor Green
