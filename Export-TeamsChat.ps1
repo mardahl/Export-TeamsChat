@@ -517,7 +517,32 @@ function Get-InteractiveBrowserToken {
     $response = $context.Response
 
     # Return a friendly page to the browser
-    $successHtml   = "<html><body style='font-family:sans-serif;text-align:center;padding:40px'><h2>&#x2705; Sign-in complete!</h2><p>You can close this browser tab and return to your terminal.</p></body></html>"
+    $successHtml = @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign-in complete</title>
+    <style>
+        :root { --bg: #f3f4f6; --surface: #ffffff; --text: #111827; --text-sec: #4b5563; --success: #10b981; }
+        @media (prefers-color-scheme: dark) { :root { --bg: #111827; --surface: #1f2937; --text: #f9fafb; --text-sec: #9ca3af; --success: #34d399; } }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+        .card { background: var(--surface); padding: 32px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center; max-width: 400px; width: 90%; }
+        .icon { width: 48px; height: 48px; fill: var(--success); margin-bottom: 16px; }
+        h2 { margin: 0 0 8px 0; font-size: 24px; }
+        p { margin: 0; color: var(--text-sec); font-size: 16px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+        <h2>Sign-in complete!</h2>
+        <p>You can close this browser tab and return to your terminal.</p>
+    </div>
+</body>
+</html>
+"@
     $responseBytes = [System.Text.Encoding]::UTF8.GetBytes($successHtml)
     $response.ContentType       = "text/html; charset=utf-8"
     $response.ContentLength64   = $responseBytes.Length
@@ -700,18 +725,441 @@ function Format-DisplayDate {
 }
 
 # ---------------------------------------------------------------------------
-# Export functions (unchanged)
+# Asset localization helpers
+# ---------------------------------------------------------------------------
+
+function Get-ExportFilePath {
+    param(
+        [string]$OutputPath,
+        [string]$ExportFormat,
+        [string]$FileStamp
+    )
+
+    $extension = switch ($ExportFormat.ToUpper()) {
+        "TXT"  { "txt" }
+        "JSON" { "json" }
+        "HTML" { "html" }
+        "CSV"  { "csv" }
+        default { throw "Unsupported export format: $ExportFormat" }
+    }
+
+    return Join-Path $OutputPath ("teams-chat-export-{0}.{1}" -f $FileStamp, $extension)
+}
+
+function Get-AssetDirectoryInfo {
+    param([string]$ExportFilePath)
+
+    $fileNameWithoutExtension = [System.IO.Path]::GetFileNameWithoutExtension($ExportFilePath)
+    $parentDirectory = Split-Path $ExportFilePath -Parent
+
+    return @{
+        Directory         = Join-Path $parentDirectory ("{0}-assets" -f $fileNameWithoutExtension)
+        RelativeDirectory = "{0}-assets" -f $fileNameWithoutExtension
+    }
+}
+
+function Get-ExtensionFromMimeType {
+    param(
+        [string]$MimeType,
+        [string]$DefaultExtension = ".bin"
+    )
+
+    if ([string]::IsNullOrWhiteSpace($MimeType)) {
+        return $DefaultExtension
+    }
+
+    $normalizedMimeType = $MimeType.Split(';')[0].Trim().ToLowerInvariant()
+
+    switch ($normalizedMimeType) {
+        "image/jpeg"                                                                    { return ".jpg" }
+        "image/jpg"                                                                     { return ".jpg" }
+        "image/png"                                                                     { return ".png" }
+        "image/gif"                                                                     { return ".gif" }
+        "image/webp"                                                                    { return ".webp" }
+        "image/bmp"                                                                     { return ".bmp" }
+        "image/tiff"                                                                    { return ".tif" }
+        "image/svg+xml"                                                                 { return ".svg" }
+        "application/pdf"                                                               { return ".pdf" }
+        "text/plain"                                                                    { return ".txt" }
+        "text/html"                                                                     { return ".html" }
+        "text/csv"                                                                      { return ".csv" }
+        "application/json"                                                              { return ".json" }
+        "application/zip"                                                               { return ".zip" }
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"       { return ".docx" }
+        "application/msword"                                                            { return ".doc" }
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"             { return ".xlsx" }
+        "application/vnd.ms-excel"                                                      { return ".xls" }
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation"     { return ".pptx" }
+        "application/vnd.ms-powerpoint"                                                 { return ".ppt" }
+        "application/octet-stream"                                                      { return $DefaultExtension }
+    }
+
+    if ($normalizedMimeType -match '^[a-z0-9.+-]+/(?<subtype>[a-z0-9.+-]+)$') {
+        $subtype = $Matches['subtype']
+        if ($subtype -match '^(?<clean>[^+]+)') {
+            return ".{0}" -f $Matches['clean']
+        }
+    }
+
+    return $DefaultExtension
+}
+
+function Get-SafeAssetFileName {
+    param(
+        [string]$PreferredName,
+        [string]$FallbackBaseName,
+        [string]$Extension,
+        [string]$AssetsPath
+    )
+
+    $candidateName = $PreferredName
+    if ([string]::IsNullOrWhiteSpace($candidateName)) {
+        $candidateName = $FallbackBaseName
+    }
+
+    try {
+        $candidateName = [uri]::UnescapeDataString($candidateName)
+    }
+    catch { }
+
+    $candidateName = [System.IO.Path]::GetFileName($candidateName)
+    if ([string]::IsNullOrWhiteSpace($candidateName)) {
+        $candidateName = $FallbackBaseName
+    }
+
+    $invalidCharacters = [regex]::Escape(([string][System.IO.Path]::GetInvalidFileNameChars()))
+    $candidateName = [regex]::Replace($candidateName, "[{0}]" -f $invalidCharacters, "-")
+    $candidateName = $candidateName.Trim(' ', '.')
+
+    if ([string]::IsNullOrWhiteSpace($candidateName)) {
+        $candidateName = $FallbackBaseName
+    }
+
+    if ([string]::IsNullOrWhiteSpace([System.IO.Path]::GetExtension($candidateName)) -and -not [string]::IsNullOrWhiteSpace($Extension)) {
+        $candidateName += $Extension
+    }
+
+    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($candidateName)
+    $finalExtension = [System.IO.Path]::GetExtension($candidateName)
+
+    if ([string]::IsNullOrWhiteSpace($baseName)) {
+        $baseName = $FallbackBaseName
+    }
+    if ([string]::IsNullOrWhiteSpace($finalExtension)) {
+        $finalExtension = $Extension
+    }
+
+    $resolvedName = "{0}{1}" -f $baseName, $finalExtension
+    $counter = 1
+
+    while (Test-Path (Join-Path $AssetsPath $resolvedName)) {
+        $counter++
+        $resolvedName = "{0}-{1}{2}" -f $baseName, $counter, $finalExtension
+    }
+
+    return $resolvedName
+}
+
+function Invoke-DownloadRequest {
+    param(
+        [string]$Uri,
+        [string]$OutFile,
+        [hashtable]$Headers
+    )
+
+    $invokeWebRequestParameters = @{
+        Uri         = $Uri
+        Method      = "GET"
+        OutFile     = $OutFile
+        ErrorAction = "Stop"
+    }
+
+    if ($Headers -and $Headers.Count -gt 0) {
+        $invokeWebRequestParameters.Headers = $Headers
+    }
+
+    if ((Get-Command Invoke-WebRequest).Parameters.ContainsKey('UseBasicParsing')) {
+        $invokeWebRequestParameters.UseBasicParsing = $true
+    }
+
+    return Invoke-WebRequest @invokeWebRequestParameters
+}
+
+function Get-PreferredFileNameFromHtmlReference {
+    param([string]$HtmlSnippet)
+
+    $attributePatterns = @(
+        'data-filename\s*=\s*["''](?<value>[^"'']+)["'']',
+        'download\s*=\s*["''](?<value>[^"'']+)["'']',
+        'title\s*=\s*["''](?<value>[^"'']+\.[A-Za-z0-9]{1,8})["'']',
+        'alt\s*=\s*["''](?<value>[^"'']+\.[A-Za-z0-9]{1,8})["'']'
+    )
+
+    foreach ($pattern in $attributePatterns) {
+        $match = [regex]::Match($HtmlSnippet, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if ($match.Success) {
+            return $match.Groups['value'].Value
+        }
+    }
+
+    return $null
+}
+
+function Save-GraphHostedContentAsset {
+    param(
+        [string]$ChatId,
+        [string]$MessageId,
+        [string]$HostedContentId,
+        [string]$AccessToken,
+        [string]$AssetsPath,
+        [string]$RelativeAssetsPath,
+        [string]$PreferredFileName
+    )
+
+    if (-not (Test-Path $AssetsPath)) {
+        New-Item -ItemType Directory -Path $AssetsPath -Force | Out-Null
+    }
+
+    $temporaryFilePath = Join-Path $AssetsPath ([System.Guid]::NewGuid().ToString() + ".download")
+    $uri = "https://graph.microsoft.com/v1.0/chats/$([uri]::EscapeDataString($ChatId))/messages/$([uri]::EscapeDataString($MessageId))/hostedContents/$([uri]::EscapeDataString($HostedContentId))/`$value"
+
+    try {
+        $response = Invoke-DownloadRequest -Uri $uri -OutFile $temporaryFilePath -Headers @{ Authorization = "Bearer $AccessToken" }
+        $contentType = if ($response.Headers['Content-Type']) { $response.Headers['Content-Type'] } else { $null }
+        $extension = Get-ExtensionFromMimeType -MimeType $contentType
+        $fileName = Get-SafeAssetFileName -PreferredName $PreferredFileName -FallbackBaseName $HostedContentId -Extension $extension -AssetsPath $AssetsPath
+        $finalPath = Join-Path $AssetsPath $fileName
+
+        Move-Item -Path $temporaryFilePath -Destination $finalPath -Force
+
+        return @{
+            FilePath     = $finalPath
+            RelativePath = "{0}/{1}" -f $RelativeAssetsPath, $fileName
+        }
+    }
+    catch {
+        if (Test-Path $temporaryFilePath) {
+            Remove-Item $temporaryFilePath -Force -ErrorAction SilentlyContinue
+        }
+
+        Write-Warning "Failed to download inline image for message '$MessageId' (hosted content '$HostedContentId'): $($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Get-AttachmentDownloadUrl {
+    param([object]$Attachment)
+
+    if ($Attachment -and $Attachment.content -is [string] -and -not [string]::IsNullOrWhiteSpace($Attachment.content)) {
+        foreach ($propertyName in @('downloadUrl', 'downloadurl', 'contentUrl', 'contenturl')) {
+            $pattern = '"{0}"\s*:\s*"(?<url>https?://[^"\\]+)"' -f [regex]::Escape($propertyName)
+            $match = [regex]::Match($Attachment.content, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+            if ($match.Success) {
+                return $match.Groups['url'].Value -replace '\\/','/'
+            }
+        }
+    }
+
+    if ($Attachment -and -not [string]::IsNullOrWhiteSpace($Attachment.contentUrl)) {
+        return $Attachment.contentUrl
+    }
+
+    return $null
+}
+
+function Get-LocalizedAssetReferences {
+    param([object]$Message)
+
+    $references = @()
+
+    if ($Message.body -and -not [string]::IsNullOrWhiteSpace($Message.body.content)) {
+        $matches = [regex]::Matches(
+            [string]$Message.body.content,
+            '(?<attribute>src|href)\s*=\s*(["''])(?<url>[^"'']*-assets/[^"'']+)\2',
+            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )
+
+        foreach ($match in $matches) {
+            $referenceUrl = $match.Groups['url'].Value
+            if (-not [string]::IsNullOrWhiteSpace($referenceUrl) -and ($references -notcontains $referenceUrl)) {
+                $references += $referenceUrl
+            }
+        }
+    }
+
+    foreach ($attachment in @($Message.attachments)) {
+        if ($attachment -and -not [string]::IsNullOrWhiteSpace($attachment.contentUrl) -and $attachment.contentUrl -match '-assets/') {
+            if ($references -notcontains $attachment.contentUrl) {
+                $references += $attachment.contentUrl
+            }
+        }
+    }
+
+    return $references
+}
+
+function Save-UrlAsset {
+    param(
+        [string]$Uri,
+        [string]$AssetsPath,
+        [string]$RelativeAssetsPath,
+        [string]$PreferredFileName,
+        [string]$FallbackBaseName,
+        [string]$ContentTypeHint,
+        [string]$AccessToken
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Uri)) {
+        return $null
+    }
+
+    if (-not (Test-Path $AssetsPath)) {
+        New-Item -ItemType Directory -Path $AssetsPath -Force | Out-Null
+    }
+
+    $headers = @{}
+    try {
+        $parsedUri = [System.Uri]$Uri
+        if ($parsedUri.Host -eq 'graph.microsoft.com' -and -not [string]::IsNullOrWhiteSpace($AccessToken)) {
+            $headers.Authorization = "Bearer $AccessToken"
+        }
+    }
+    catch { }
+
+    $temporaryFilePath = Join-Path $AssetsPath ([System.Guid]::NewGuid().ToString() + ".download")
+
+    try {
+        $response = Invoke-DownloadRequest -Uri $Uri -OutFile $temporaryFilePath -Headers $headers
+        $contentType = if ($response.Headers['Content-Type']) { $response.Headers['Content-Type'] } else { $ContentTypeHint }
+        $extension = Get-ExtensionFromMimeType -MimeType $contentType
+        $fallbackName = if (-not [string]::IsNullOrWhiteSpace($FallbackBaseName)) { $FallbackBaseName } else { [System.Guid]::NewGuid().ToString() }
+        $fileName = Get-SafeAssetFileName -PreferredName $PreferredFileName -FallbackBaseName $fallbackName -Extension $extension -AssetsPath $AssetsPath
+        $finalPath = Join-Path $AssetsPath $fileName
+
+        Move-Item -Path $temporaryFilePath -Destination $finalPath -Force
+
+        return @{
+            FilePath     = $finalPath
+            RelativePath = "{0}/{1}" -f $RelativeAssetsPath, $fileName
+        }
+    }
+    catch {
+        if (Test-Path $temporaryFilePath) {
+            Remove-Item $temporaryFilePath -Force -ErrorAction SilentlyContinue
+        }
+
+        Write-Warning "Failed to download attachment '$PreferredFileName' from '$Uri': $($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Update-MessageAssets {
+    param(
+        [array]$Messages,
+        [string]$ChatId,
+        [string]$AccessToken,
+        [string]$ExportFilePath
+    )
+
+    if (-not $Messages -or [string]::IsNullOrWhiteSpace($ExportFilePath)) {
+        return $Messages
+    }
+
+    $assetDirectoryInfo = Get-AssetDirectoryInfo -ExportFilePath $ExportFilePath
+
+    foreach ($message in $Messages) {
+        if (-not $message.body) {
+            continue
+        }
+
+        $messageContent = if ($null -ne $message.body.content) { [string]$message.body.content } else { "" }
+
+        if (-not [string]::IsNullOrWhiteSpace($messageContent)) {
+            $hostedContentMatches = [regex]::Matches(
+                $messageContent,
+                '(?<attribute>src|href)\s*=\s*(["''])(?<url>[^"'']*?/hostedContents/(?<id>[^/"'']+)/\$value[^"'']*)\2',
+                [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+            )
+
+            $downloadedHostedContent = @{}
+            foreach ($match in $hostedContentMatches) {
+                $hostedContentId = $match.Groups['id'].Value
+                if ([string]::IsNullOrWhiteSpace($hostedContentId)) {
+                    continue
+                }
+
+                if (-not $downloadedHostedContent.ContainsKey($hostedContentId)) {
+                    $preferredFileName = Get-PreferredFileNameFromHtmlReference -HtmlSnippet $match.Value
+                    $downloadResult = Save-GraphHostedContentAsset -ChatId $ChatId -MessageId $message.id -HostedContentId $hostedContentId -AccessToken $AccessToken -AssetsPath $assetDirectoryInfo.Directory -RelativeAssetsPath $assetDirectoryInfo.RelativeDirectory -PreferredFileName $preferredFileName
+                    if ($downloadResult) {
+                        $downloadedHostedContent[$hostedContentId] = $downloadResult.RelativePath
+                    }
+                }
+
+                if ($downloadedHostedContent.ContainsKey($hostedContentId)) {
+                    $messageContent = $messageContent.Replace($match.Groups['url'].Value, $downloadedHostedContent[$hostedContentId])
+                }
+            }
+        }
+
+        foreach ($attachment in @($message.attachments)) {
+            $downloadUrl = Get-AttachmentDownloadUrl -Attachment $attachment
+            if ([string]::IsNullOrWhiteSpace($downloadUrl)) {
+                continue
+            }
+
+            $attachmentName = if (-not [string]::IsNullOrWhiteSpace($attachment.name)) { $attachment.name } else { $null }
+            $downloadResult = Save-UrlAsset -Uri $downloadUrl -AssetsPath $assetDirectoryInfo.Directory -RelativeAssetsPath $assetDirectoryInfo.RelativeDirectory -PreferredFileName $attachmentName -FallbackBaseName $attachment.id -ContentTypeHint $attachment.contentType -AccessToken $AccessToken
+
+            if (-not $downloadResult) {
+                continue
+            }
+
+            $referenceUrls = @()
+            foreach ($candidateUrl in @($downloadUrl, $attachment.contentUrl, $attachment.thumbnailUrl)) {
+                if (-not [string]::IsNullOrWhiteSpace($candidateUrl) -and ($referenceUrls -notcontains $candidateUrl)) {
+                    $referenceUrls += $candidateUrl
+                }
+            }
+
+            foreach ($referenceUrl in $referenceUrls) {
+                if (-not [string]::IsNullOrWhiteSpace($messageContent)) {
+                    $messageContent = $messageContent.Replace($referenceUrl, $downloadResult.RelativePath)
+                }
+
+                if ($attachment.PSObject.Properties['content'] -and $attachment.content -is [string]) {
+                    $attachment.content = $attachment.content.Replace($referenceUrl, $downloadResult.RelativePath)
+                }
+            }
+
+            if ($attachment.PSObject.Properties['contentUrl']) {
+                $attachment.contentUrl = $downloadResult.RelativePath
+            }
+        }
+
+        $message.body.content = $messageContent
+    }
+
+    return $Messages
+}
+
+# ---------------------------------------------------------------------------
+# Export functions (extended)
 # ---------------------------------------------------------------------------
 
 function Export-ToText {
     param(
         [object]$ChatData,
         [array]$Messages,
-        [string]$OutputPath
+        [string]$OutputPath,
+        [string]$ExportFilePath
     )
 
-    $fileName = "teams-chat-export-$(Get-Date -Format 'yyyy-MM-dd-HHmm').txt"
-    $filePath = Join-Path $OutputPath $fileName
+    $filePath = if ([string]::IsNullOrWhiteSpace($ExportFilePath)) {
+        Join-Path $OutputPath "teams-chat-export-$(Get-Date -Format 'yyyy-MM-dd-HHmm').txt"
+    } else {
+        $ExportFilePath
+    }
 
     $content = @"
 Microsoft Teams Chat Export
@@ -742,6 +1190,11 @@ Messages:
         else {
             $messageContent = Remove-HtmlTags $msg.body.content
             $content += "   $messageContent`n"
+
+            $assetReferences = Get-LocalizedAssetReferences -Message $msg
+            if ($assetReferences.Count -gt 0) {
+                $content += "   Assets: $($assetReferences -join ', ')`n"
+            }
         }
         $content += "`n"
     }
@@ -756,11 +1209,15 @@ function Export-ToJSON {
     param(
         [object]$ChatData,
         [array]$Messages,
-        [string]$OutputPath
+        [string]$OutputPath,
+        [string]$ExportFilePath
     )
 
-    $fileName = "teams-chat-export-$(Get-Date -Format 'yyyy-MM-dd-HHmm').json"
-    $filePath = Join-Path $OutputPath $fileName
+    $filePath = if ([string]::IsNullOrWhiteSpace($ExportFilePath)) {
+        Join-Path $OutputPath "teams-chat-export-$(Get-Date -Format 'yyyy-MM-dd-HHmm').json"
+    } else {
+        $ExportFilePath
+    }
 
     $exportData = @{
         chatInfo       = $ChatData
@@ -778,80 +1235,195 @@ function Export-ToHTML {
     param(
         [object]$ChatData,
         [array]$Messages,
-        [string]$OutputPath
+        [string]$OutputPath,
+        [string]$ExportFilePath
     )
 
-    $fileName = "teams-chat-export-$(Get-Date -Format 'yyyy-MM-dd-HHmm').html"
-    $filePath = Join-Path $OutputPath $fileName
+    $filePath = if ([string]::IsNullOrWhiteSpace($ExportFilePath)) {
+        Join-Path $OutputPath "teams-chat-export-$(Get-Date -Format 'yyyy-MM-dd-HHmm').html"
+    } else {
+        $ExportFilePath
+    }
 
     $sortedMessages = $Messages | Sort-Object createdDateTime
 
     $messagesHtml = ""
+    $previousSender = ""
+    $previousTime = ""
+
     foreach ($msg in $sortedMessages) {
         $sender          = if ($msg.from.user.displayName) { $msg.from.user.displayName } else { "System" }
         $timestamp       = Format-DisplayDate $msg.createdDateTime
         $isSystemMessage = $msg.messageType -eq "unknownFutureValue" -or $msg.messageType -eq "systemEventMessage"
-        $messageClass    = if ($isSystemMessage) { "message system-message" } else { "message" }
 
         if ($isSystemMessage) {
             $content = "System: $($msg.eventDetail.'@odata.type' -replace '#microsoft.graph.', '')"
-        }
-        else {
-            $content = $msg.body.content
+            $messagesHtml += @"
+        <article class="msg msg-system">
+            <div class="msg-bubble">
+                <svg class="sys-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+                <span class="msg-content">$content</span>
+            </div>
+        </article>
+"@
+            $previousSender = ""
+            continue
         }
 
-        $messagesHtml += @"
-        <div class="$messageClass">
-            <div class="message-header">
-                <span class="sender">$sender</span>
-                <span class="timestamp">$timestamp</span>
+        $content = $msg.body.content
+
+        # Group consecutive messages from the same sender within the same minute
+        $showMeta = $true
+        if ($sender -eq $previousSender -and $timestamp -eq $previousTime) {
+            $showMeta = $false
+        }
+
+        # Calculate initials for avatar
+        $initials = "?"
+        if (-not [string]::IsNullOrWhiteSpace($sender) -and $sender -ne "System") {
+            $parts = $sender.Split(" ", [StringSplitOptions]::RemoveEmptyEntries)
+            if ($parts.Count -ge 2) {
+                $initials = ($parts[0][0] + $parts[-1][0]).ToString().ToUpper()
+            } else {
+                $initials = $sender[0].ToString().ToUpper()
+            }
+        }
+
+        # Calculate Avatar Color Index based on sender name hash
+        $hash = 0
+        if ($sender) {
+            foreach ($char in $sender.ToCharArray()) {
+                $hash = [int]$char + (($hash -shl 5) - $hash)
+            }
+        }
+        $colorIndex = [Math]::Abs($hash % 5)
+
+        if ($showMeta) {
+            $messagesHtml += @"
+        <article class="msg">
+            <div class="avatar avatar-color-$colorIndex" aria-hidden="true">$initials</div>
+            <div class="msg-body">
+                <header class="msg-meta">
+                    <span class="msg-sender">$sender</span>
+                    <time class="msg-time">$timestamp</time>
+                </header>
+                <div class="msg-bubble">
+                    <div class="msg-content">$content</div>
+                </div>
             </div>
-            <div class="message-content">$content</div>
-        </div>
+        </article>
 "@
+        } else {
+            $messagesHtml += @"
+        <article class="msg msg-grouped">
+            <div class="avatar-spacer"></div>
+            <div class="msg-body">
+                <div class="msg-bubble">
+                    <div class="msg-content">$content</div>
+                </div>
+            </div>
+        </article>
+"@
+        }
+
+        $previousSender = $sender
+        $previousTime = $timestamp
     }
 
     $html = @"
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <title>Teams Chat Export - $(Format-DisplayDate $ChatData.createdDateTime)</title>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif; margin: 20px; background: #f5f5f5; }
-        .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .chat-info { background: #f0f8ff; padding: 20px; border-radius: 8px; margin-bottom: 25px; border-left: 5px solid #4c63d2; }
-        .message { border-left: 4px solid #4c63d2; padding: 15px; margin-bottom: 15px; background: #fafafa; border-radius: 8px; }
-        .message-header { font-weight: bold; margin-bottom: 8px; color: #4c63d2; display: flex; justify-content: space-between; }
-        .timestamp { color: #666; font-size: 0.9em; font-weight: normal; }
-        .message-content { line-height: 1.6; color: #333; }
-        .system-message { background: #fff3cd; border-left-color: #ffc107; color: #856404; font-style: italic; }
-        .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; color: #666; font-size: 0.9em; text-align: center; }
-        h1 { color: #4c63d2; margin-bottom: 20px; }
-        h3 { color: #333; margin-bottom: 15px; }
+        :root {
+            --spacing-1: 4px; --spacing-2: 8px; --spacing-3: 12px; --spacing-4: 16px; --spacing-6: 24px; --spacing-8: 32px;
+            --bg-base: #f3f4f6;
+            --bg-surface: #ffffff;
+            --bg-bubble: #f3f4f6;
+            --bg-bubble-system: #fef3c7;
+            --text-primary: #111827;
+            --text-secondary: #4b5563;
+            --border-divider: #e5e7eb;
+            --brand-primary: #4f46e5;
+            --radius-sm: 4px; --radius-md: 8px; --radius-lg: 12px; --radius-xl: 16px;
+            --avatar-0: #ef4444; --avatar-1: #f59e0b; --avatar-2: #10b981; --avatar-3: #3b82f6; --avatar-4: #8b5cf6;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-base: #111827;
+                --bg-surface: #1f2937;
+                --bg-bubble: #374151;
+                --bg-bubble-system: #451a03;
+                --text-primary: #f9fafb;
+                --text-secondary: #9ca3af;
+                --border-divider: #374151;
+                --brand-primary: #6366f1;
+                --avatar-0: #f87171; --avatar-1: #fbbf24; --avatar-2: #34d399; --avatar-3: #60a5fa; --avatar-4: #a78bfa;
+            }
+        }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); background: var(--bg-base); color: var(--text-primary); line-height: 1.5; -webkit-font-smoothing: antialiased; }
+        main { max-width: 768px; margin: 0 auto; padding: var(--spacing-4); }
+        .header { display: flex; align-items: center; gap: var(--spacing-3); margin-bottom: var(--spacing-6); padding-bottom: var(--spacing-4); border-bottom: 1px solid var(--border-divider); }
+        .header-icon { width: 32px; height: 32px; fill: var(--brand-primary); }
+        h1 { font-size: 24px; margin: 0; font-weight: 600; }
+        .info-card { background: var(--bg-surface); border-radius: var(--radius-lg); padding: var(--spacing-4); margin-bottom: var(--spacing-6); box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .info-card h2 { margin: 0 0 var(--spacing-3) 0; font-size: 18px; color: var(--text-primary); }
+        .info-list { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--spacing-2); color: var(--text-secondary); font-size: 14px; }
+        .info-list strong { color: var(--text-primary); font-weight: 600; }
+        .messages { display: flex; flex-direction: column; gap: var(--spacing-4); }
+        .msg { display: flex; gap: var(--spacing-3); }
+        .msg-grouped { margin-top: calc(var(--spacing-3) * -1); }
+        .avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 14px; font-weight: 600; flex-shrink: 0; }
+        .avatar-spacer { width: 36px; flex-shrink: 0; }
+        .avatar-color-0 { background: var(--avatar-0); }
+        .avatar-color-1 { background: var(--avatar-1); }
+        .avatar-color-2 { background: var(--avatar-2); }
+        .avatar-color-3 { background: var(--avatar-3); }
+        .avatar-color-4 { background: var(--avatar-4); }
+        .msg-body { flex: 1; min-width: 0; }
+        .msg-meta { display: flex; align-items: baseline; gap: var(--spacing-2); margin-bottom: var(--spacing-1); }
+        .msg-sender { font-weight: 600; font-size: 14px; color: var(--text-primary); }
+        .msg-time { font-size: 12px; color: var(--text-secondary); }
+        .msg-bubble { background: var(--bg-surface); padding: var(--spacing-2) var(--spacing-3); border-radius: var(--radius-lg); border-top-left-radius: var(--radius-sm); box-shadow: 0 1px 2px rgba(0,0,0,0.05); display: inline-block; max-width: 100%; }
+        .msg-content { font-size: 15px; word-wrap: break-word; color: var(--text-primary); }
+        .msg-content p { margin: 0 0 var(--spacing-2) 0; }
+        .msg-content p:last-child { margin: 0; }
+        .msg-content img { max-width: 100%; border-radius: var(--radius-md); }
+        .msg-system { justify-content: center; }
+        .msg-system .msg-bubble { background: var(--bg-bubble-system); border-radius: var(--radius-xl); border: none; font-size: 13px; display: flex; align-items: center; gap: var(--spacing-2); padding: var(--spacing-2) var(--spacing-4); box-shadow: none; color: var(--text-primary); }
+        .sys-icon { width: 16px; height: 16px; fill: currentColor; flex-shrink: 0; }
+        footer { margin-top: var(--spacing-8); padding-top: var(--spacing-4); border-top: 1px solid var(--border-divider); text-align: center; font-size: 12px; color: var(--text-secondary); }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>📱 Microsoft Teams Chat Export</h1>
+    <main>
+        <header class="header">
+            <svg class="header-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.2L4 17.2V4h16v12z"/></svg>
+            <h1>Microsoft Teams Chat Export</h1>
+        </header>
 
-        <div class="chat-info">
-            <h3>Chat Information</h3>
-            <p><strong>Chat Type:</strong> $($ChatData.chatType)</p>
-            <p><strong>Created:</strong> $(Format-DisplayDate $ChatData.createdDateTime)</p>
-            <p><strong>Participants:</strong> $($ChatData.members.displayName -join ', ')</p>
-            <p><strong>Total Messages:</strong> $($Messages.Count)</p>
-            <p><strong>Chat ID:</strong> <code>$($ChatData.id)</code></p>
-        </div>
+        <section class="info-card" aria-label="Chat Information">
+            <h2>Chat Details</h2>
+            <ul class="info-list">
+                <li><strong>Type:</strong> $($ChatData.chatType)</li>
+                <li><strong>Created:</strong> $(Format-DisplayDate $ChatData.createdDateTime)</li>
+                <li><strong>Participants:</strong> $($ChatData.members.displayName -join ', ')</li>
+                <li><strong>Messages:</strong> $($Messages.Count)</li>
+                <li><strong>Chat ID:</strong> <code>$($ChatData.id)</code></li>
+            </ul>
+        </section>
 
-        <div class="messages">
+        <section class="messages" aria-label="Chat Messages">
             $messagesHtml
-        </div>
+        </section>
 
-        <div class="footer">
+        <footer>
             <p>Exported on $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') using Microsoft Graph API</p>
-        </div>
-    </div>
+        </footer>
+    </main>
 </body>
 </html>
 "@
@@ -864,11 +1436,15 @@ function Export-ToCSV {
     param(
         [object]$ChatData,
         [array]$Messages,
-        [string]$OutputPath
+        [string]$OutputPath,
+        [string]$ExportFilePath
     )
 
-    $fileName = "teams-chat-export-$(Get-Date -Format 'yyyy-MM-dd-HHmm').csv"
-    $filePath = Join-Path $OutputPath $fileName
+    $filePath = if ([string]::IsNullOrWhiteSpace($ExportFilePath)) {
+        Join-Path $OutputPath "teams-chat-export-$(Get-Date -Format 'yyyy-MM-dd-HHmm').csv"
+    } else {
+        $ExportFilePath
+    }
 
     $csvData = @()
 
@@ -883,6 +1459,11 @@ function Export-ToCSV {
         }
         else {
             $content = Remove-HtmlTags $msg.body.content
+
+            $assetReferences = Get-LocalizedAssetReferences -Message $msg
+            if ($assetReferences.Count -gt 0) {
+                $content = "{0} [Assets: {1}]" -f $content, ($assetReferences -join ', ')
+            }
         }
 
         $csvData += [PSCustomObject]@{
@@ -1249,14 +1830,20 @@ function Start-TeamsExport {
         # Get all messages
         $messages = Get-AllChatMessages -ChatId $chatId -AccessToken $accessToken
 
+        $fileStamp = Get-Date -Format 'yyyy-MM-dd-HHmm'
+        $exportFilePath = Get-ExportFilePath -OutputPath $script:OutputPath -ExportFormat $script:ExportFormat -FileStamp $fileStamp
+
+        Write-Host "`n📎 Downloading inline images and attachments..." -ForegroundColor Cyan
+        $messages = Update-MessageAssets -Messages $messages -ChatId $chatId -AccessToken $accessToken -ExportFilePath $exportFilePath
+
         # Export based on format
         Write-Host "`n📤 Exporting to $script:ExportFormat format..." -ForegroundColor Cyan
 
         $exportedFile = switch ($script:ExportFormat.ToUpper()) {
-            "TXT"  { Export-ToText  -ChatData $chatData -Messages $messages -OutputPath $script:OutputPath }
-            "JSON" { Export-ToJSON  -ChatData $chatData -Messages $messages -OutputPath $script:OutputPath }
-            "HTML" { Export-ToHTML  -ChatData $chatData -Messages $messages -OutputPath $script:OutputPath }
-            "CSV"  { Export-ToCSV   -ChatData $chatData -Messages $messages -OutputPath $script:OutputPath }
+            "TXT"  { Export-ToText  -ChatData $chatData -Messages $messages -OutputPath $script:OutputPath -ExportFilePath $exportFilePath }
+            "JSON" { Export-ToJSON  -ChatData $chatData -Messages $messages -OutputPath $script:OutputPath -ExportFilePath $exportFilePath }
+            "HTML" { Export-ToHTML  -ChatData $chatData -Messages $messages -OutputPath $script:OutputPath -ExportFilePath $exportFilePath }
+            "CSV"  { Export-ToCSV   -ChatData $chatData -Messages $messages -OutputPath $script:OutputPath -ExportFilePath $exportFilePath }
         }
 
         Write-Host "`n🎉 Export completed successfully!" -ForegroundColor Green

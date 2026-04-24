@@ -4,6 +4,7 @@ Export Microsoft Teams chat conversations to TXT, JSON, HTML, or CSV using the M
 
 ## Features
 - Export formats: TXT, JSON, HTML, CSV
+- Downloads inline hosted images and file attachments, then rewrites message references to local relative paths
 - **Delegated auth — device code flow** — enter a short code in your browser; no admin consent required
 - **Delegated auth — browser sign-in (PKCE)** — opens a real browser window for direct sign-in; useful when device code flow is blocked by Conditional Access policies
 - **App-only auth (client credentials)** — tenant-wide access for admin/automation scenarios
@@ -49,7 +50,7 @@ Two flows are available for delegated (user) sign-in:
 
 ### Delegated mode (personal use)
 - PowerShell 5.1+ (Windows PowerShell or PowerShell 7+)
-- A Microsoft Entra tenant ID
+- A Microsoft Entra tenant ID is recommended, but optional when using delegated auth. If omitted, the script signs in via the `common` endpoint and detects the tenant from the returned token.
 - A Client ID with the `Chat.Read` **delegated** permission — or use the default Microsoft Graph Command Line Tools app (`14d82eec-204b-4c2f-b7e8-296a70dab67e`), which requires no app registration
 - **Browser sign-in only:** the redirect URI `http://localhost:<port>` (any port 8400–8420) must be registered on the app. The default Microsoft Graph Command Line Tools app supports loopback redirect URIs for public clients.
 
@@ -105,7 +106,7 @@ Use this if your organisation's Conditional Access policies block device code fl
 
 ## Configuration file
 
-`TeamsExportConfig.json` is used to store app-only credentials so you don't have to pass them as parameters each time.
+`TeamsExportConfig.json` can store either app-only settings or delegated defaults so you don't have to re-enter them each time.
 
 Create a config template:
 ```powershell
@@ -116,10 +117,10 @@ The file is saved next to the script. Fields:
 
 | Field | Description |
 |---|---|
+| `AuthMode` | Set to `AppOnly` for client credentials flow or `Delegated` to keep delegated defaults in the file |
 | `TenantId` | Your Entra tenant ID |
 | `ClientId` | Your app registration's client ID |
-| `ClientSecret` | Your client secret (app-only mode) |
-| `AuthMode` | Set to `AppOnly` for client credentials flow |
+| `ClientSecret` | Your client secret (app-only mode only; leave blank for delegated mode) |
 
 > Do not commit this file to source control. Add `TeamsExportConfig.json` to your `.gitignore`.
 
@@ -138,6 +139,11 @@ pwsh ./Export-TeamsChat.ps1 -Interactive -BrowserAuth
 **Non-interactive — delegated browser sign-in:**
 ```powershell
 pwsh ./Export-TeamsChat.ps1 -TenantId "<tenantId>" -BrowserAuth -TeamsUrl "https://teams.microsoft.com/l/chat/..."
+```
+
+**Non-interactive — delegated device code sign-in:**
+```powershell
+pwsh ./Export-TeamsChat.ps1 -TenantId "<tenantId>" -TeamsUrl "https://teams.microsoft.com/l/chat/..."
 ```
 
 **Direct parameters — app-only auth:**
@@ -170,12 +176,19 @@ Tip: Links typically look like https://teams.microsoft.com/l/chat/... and contai
 
 ## Output
 - The script writes the exported file to disk and also outputs the full file path to the pipeline (stdout).
+- When inline images or file attachments are found, the script downloads them into a sibling folder named `{export-filename-without-extension}-assets`.
+- Example: `teams-chat-export-2026-04-24-1530.html` produces `teams-chat-export-2026-04-24-1530-assets/` in the same directory.
+- HTML output rewrites `src` and `href` references to those local relative asset paths.
+- JSON output preserves the rewritten message HTML and localized attachment URLs.
+- TXT and CSV output include localized asset paths alongside the message text when assets were downloaded.
+- If an asset download fails, the script logs a warning and continues the export.
 
 ## Notes
 - Graph API base: `https://graph.microsoft.com/v1.0`
 - The script parses common Teams chat URL patterns to extract the chat ID (e.g., `19:...@thread.v2` or `...@unq`).
 - In delegated mode, only chats where the signed-in user is a participant are accessible — this is a Graph API constraint, not a script limitation.
 - Browser sign-in (PKCE) starts a temporary HTTP listener on a loopback port (8400–8420). No data leaves your machine through this listener.
+- Hosted inline images are downloaded from `GET /chats/{chatId}/messages/{messageId}/hostedContents/{hostedContentId}/$value` using the same authenticated Graph token the export already uses.
 
 ## License
 - Prosperity Public License 3.0.0 (noncommercial + 30-day commercial trial)
