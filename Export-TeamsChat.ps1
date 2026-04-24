@@ -994,7 +994,7 @@ function Update-MessageAssets {
         if (-not [string]::IsNullOrWhiteSpace($messageContent)) {
             $hostedContentMatches = [regex]::Matches(
                 $messageContent,
-                '(?<attribute>src|href)\s*=\s*(["''])(?<url>[^"'']*?/hostedContents/(?<id>[^/"'']+)/\$value[^"'']*)\2',
+                '(?<url>https://graph\.microsoft\.com/v1\.0/chats/[^"''\s<>]*/messages/[^"''\s<>]*/hostedContents/(?<id>[^/"''\s<>]+)/\$value)',
                 [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
             )
 
