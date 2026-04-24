@@ -612,7 +612,7 @@ function Get-ChatIdFromUrl {
     }
 }
 
-function Invoke-GraphRequest {
+function Invoke-MsGraphRequest {
     param(
         [string]$Endpoint,
         [string]$AccessToken,
@@ -658,7 +658,7 @@ function Get-AllChatMessages {
     Write-Host "📥 Fetching chat messages..." -ForegroundColor Cyan
 
     do {
-        $response     = Invoke-GraphRequest -Endpoint $nextLink -AccessToken $AccessToken
+        $response     = Invoke-MsGraphRequest -Endpoint $nextLink -AccessToken $AccessToken
         $allMessages += $response.value
 
         Write-Host "📨 Retrieved $($response.value.Count) messages (Total: $($allMessages.Count))" -ForegroundColor Gray
@@ -1237,10 +1237,10 @@ function Start-TeamsExport {
 
         # Get chat information
         Write-Host "`n📊 Retrieving chat information..." -ForegroundColor Cyan
-        $chatData = Invoke-GraphRequest -Endpoint "/chats/$([uri]::EscapeDataString($chatId))" -AccessToken $accessToken
+        $chatData = Invoke-MsGraphRequest -Endpoint "/chats/$([uri]::EscapeDataString($chatId))" -AccessToken $accessToken
 
         # Get chat members
-        $membersResponse = Invoke-GraphRequest -Endpoint "/chats/$([uri]::EscapeDataString($chatId))/members" -AccessToken $accessToken
+        $membersResponse = Invoke-MsGraphRequest -Endpoint "/chats/$([uri]::EscapeDataString($chatId))/members" -AccessToken $accessToken
         $chatData | Add-Member -NotePropertyName "members" -NotePropertyValue $membersResponse.value
 
         Write-Host "✅ Chat Type: $($chatData.chatType)" -ForegroundColor Green
