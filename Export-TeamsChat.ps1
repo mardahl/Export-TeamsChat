@@ -24,7 +24,8 @@ Two authentication modes are supported:
     and ClientSecret with Chat.Read.All application permission granted by an admin.
 
 .PARAMETER TenantId
-The Microsoft Entra ID tenant ID (GUID).
+The Microsoft Entra ID tenant ID (GUID). Optional in delegated mode — if omitted or set to 'common',
+the script authenticates via the common endpoint and auto-detects the tenant ID from the returned token.
 
 .PARAMETER ClientId
 The application (client) ID of your app registration in Microsoft Entra ID.
@@ -112,7 +113,7 @@ String. Returns the full file path of the exported file.
 
 .NOTES
 Author: Michael Mardahl (GitHub: https://github.com/mardahl)
-Version: 1.2.0
+Version: 1.2.1
 Last Updated: 2026-04-24
 LLM: ChatGPT 5 and Claude 4
 Work: Consultant for hire via inciro.com
@@ -277,10 +278,14 @@ function Get-AccessToken {
     catch {
         Write-Error "❌ Authentication failed: $($_.Exception.Message)"
         if ($_.Exception.Response) {
-            $errorBody = $_.Exception.Response.GetResponseStream()
-            $reader = New-Object System.IO.StreamReader($errorBody)
-            $errorContent = $reader.ReadToEnd()
-            Write-Error "Error details: $errorContent"
+            $errorContent = if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+                $_.ErrorDetails.Message
+            } elseif ($_.Exception.Response | Get-Member -Name GetResponseStream -MemberType Method -ErrorAction SilentlyContinue) {
+                $stream = $_.Exception.Response.GetResponseStream()
+                $reader = New-Object System.IO.StreamReader($stream)
+                $reader.ReadToEnd()
+            } else { "" }
+            if ($errorContent) { Write-Error "Error details: $errorContent" }
         }
         throw
     }
@@ -359,11 +364,11 @@ function Get-DelegatedAccessToken {
             try {
                 $errorBody = if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
                     $_.ErrorDetails.Message
-                } else {
+                } elseif ($_.Exception.Response -and ($_.Exception.Response | Get-Member -Name GetResponseStream -MemberType Method -ErrorAction SilentlyContinue)) {
                     $stream = $_.Exception.Response.GetResponseStream()
                     $reader = New-Object System.IO.StreamReader($stream)
                     $reader.ReadToEnd()
-                }
+                } else { "" }
                 $rawError = $errorBody | ConvertFrom-Json
             }
             catch { <# ignore parse errors #> }
@@ -551,6 +556,24 @@ function Get-InteractiveBrowserToken {
 }
 
 
+function Get-TenantIdFromToken {
+    # Decodes a JWT access token and returns the 'tid' (tenant ID) claim.
+    # Works on PowerShell 5.1 and 7+. Returns $null on any failure.
+    param([string]$AccessToken)
+    try {
+        $parts = $AccessToken.Split('.')
+        if ($parts.Count -lt 2) { return $null }
+        $payload = $parts[1]
+        # Base64url → standard base64
+        $padded  = $payload.PadRight($payload.Length + (4 - $payload.Length % 4) % 4, '=')
+        $decoded = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($padded))
+        $claims  = $decoded | ConvertFrom-Json
+        return $claims.tid
+    }
+    catch { return $null }
+}
+
+
 function Get-ChatIdFromUrl {
     param([string]$TeamsUrl)
 
@@ -604,7 +627,9 @@ function Invoke-GraphRequest {
         $statusCode = $_.Exception.Response.StatusCode
         $errorBody  = ""
 
-        if ($_.Exception.Response) {
+        if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+            $errorBody = $_.ErrorDetails.Message
+        } elseif ($_.Exception.Response -and ($_.Exception.Response | Get-Member -Name GetResponseStream -MemberType Method -ErrorAction SilentlyContinue)) {
             $stream    = $_.Exception.Response.GetResponseStream()
             $reader    = New-Object System.IO.StreamReader($stream)
             $errorBody = $reader.ReadToEnd()
@@ -1036,8 +1061,12 @@ function Start-InteractiveMode {
 
     Write-Host "`n🔐 Sign-in configuration" -ForegroundColor Yellow
 
-    # Tenant ID
-    $script:TenantId = Get-SecureInput "Tenant ID" -DefaultValue $savedTenantId -Required
+    # Tenant ID — optional in delegated mode.
+    # Using 'common' lets Microsoft route the sign-in to the correct tenant automatically;
+    # the real tenant ID is then extracted from the returned access token.
+    $tenantIdDefault = if (-not [string]::IsNullOrWhiteSpace($savedTenantId)) { $savedTenantId } else { "common" }
+    Write-Host "  (Leave blank or press Enter to use 'common' — tenant ID will be detected from your session)" -ForegroundColor Gray
+    $script:TenantId = Get-SecureInput "Tenant ID" -DefaultValue $tenantIdDefault
 
     # Client ID (default = well-known MS Graph Command Line Tools app)
     $clientIdPrompt  = "Client ID [Microsoft Graph Command Line Tools (default)]"
@@ -1050,6 +1079,15 @@ function Start-InteractiveMode {
         $script:AccessToken = Get-InteractiveBrowserToken -TenantId $script:TenantId -ClientId $script:ClientId
     } else {
         $script:AccessToken = Get-DelegatedAccessToken -TenantId $script:TenantId -ClientId $script:ClientId
+    }
+
+    # Auto-detect the real tenant ID from the JWT when 'common' was used or no ID was supplied
+    if ([string]::IsNullOrWhiteSpace($script:TenantId) -or $script:TenantId -eq "common") {
+        $detectedTenantId = Get-TenantIdFromToken -AccessToken $script:AccessToken
+        if ($detectedTenantId) {
+            $script:TenantId = $detectedTenantId
+            Write-Host "ℹ️ Tenant ID detected from session: $detectedTenantId" -ForegroundColor Gray
+        }
     }
     Write-Host ""
 
@@ -1147,16 +1185,12 @@ function Start-TeamsExport {
             return
         }
     } else {
-        if (-not $script:TenantId -or -not $script:ClientId) {
-            Write-Error "❌ Delegated mode requires at least TenantId (ClientId defaults to the Microsoft Graph Command Line Tools app)."
-            Write-Host "`n💡 Tips:" -ForegroundColor Yellow
-            Write-Host "   - Run with -Interactive for a guided setup"
-            Write-Host "   - Run with -ConfigFile to create a configuration template"
-            return
-        }
-        # Apply default ClientId for delegated mode if not provided
+        # Delegated mode: ClientId is optional (defaults to the well-known app); TenantId defaults to 'common'
         if ([string]::IsNullOrWhiteSpace($script:ClientId)) {
             $script:ClientId = $script:DefaultDelegatedClientId
+        }
+        if ([string]::IsNullOrWhiteSpace($script:TenantId)) {
+            $script:TenantId = "common"
         }
     }
 
@@ -1181,6 +1215,15 @@ function Start-TeamsExport {
                 $script:AccessToken = Get-InteractiveBrowserToken -TenantId $script:TenantId -ClientId $script:ClientId
             } else {
                 $script:AccessToken = Get-DelegatedAccessToken -TenantId $script:TenantId -ClientId $script:ClientId
+            }
+
+            # Auto-detect the real tenant ID from the JWT when 'common' was used
+            if (-not $useAppOnly -and ($script:TenantId -eq "common")) {
+                $detectedTenantId = Get-TenantIdFromToken -AccessToken $script:AccessToken
+                if ($detectedTenantId) {
+                    $script:TenantId = $detectedTenantId
+                    Write-Host "ℹ️ Tenant ID detected from session: $detectedTenantId" -ForegroundColor Gray
+                }
             }
         }
 
