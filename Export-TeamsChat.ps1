@@ -913,9 +913,12 @@ function Start-TeamsExport {
         if ($script:InteractiveCancelled) { return }
     }
     else {
-        $script:TenantId     = $TenantId     ?? $config.TenantId
-        $script:ClientId     = $ClientId     ?? $config.ClientId
-        $script:ClientSecret = $ClientSecret ?? $config.ClientSecret
+        # Resolve credentials: parameters take precedence over config file values.
+        # Use [string]::IsNullOrEmpty() so that empty-string template values ("") fall
+        # back to the config correctly — the ?? operator only coalesces $null, not "".
+        $script:TenantId     = if (-not [string]::IsNullOrEmpty($TenantId))     { $TenantId }     elseif ($config) { $config.TenantId }     else { $null }
+        $script:ClientId     = if (-not [string]::IsNullOrEmpty($ClientId))     { $ClientId }     elseif ($config) { $config.ClientId }     else { $null }
+        $script:ClientSecret = if (-not [string]::IsNullOrEmpty($ClientSecret)) { $ClientSecret } elseif ($config) { $config.ClientSecret } else { $null }
     }
 
     $script:ExportFormat = $script:ExportFormat ?? $ExportFormat
