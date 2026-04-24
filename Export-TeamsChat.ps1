@@ -5,14 +5,19 @@ Exports Microsoft Teams chat conversations to TXT, JSON, HTML, or CSV using the 
 .DESCRIPTION
 Retrieves chat metadata, members, and messages for a specified Microsoft Teams chat (provided as a Teams chat URL) using Microsoft Graph (v1.0) and exports them in the chosen format. Supports non-interactive parameter input, a guided -Interactive mode, and an optional configuration template file stored next to the script.
 
+Compatible with PowerShell 5.1 and PowerShell 7+.
+
 Two authentication modes are supported:
 
   Delegated (default for -Interactive / no-params):
-    Uses the OAuth 2.0 device code flow. Only requires TenantId and ClientId.
-    No client secret is needed. The user signs in via a browser. The default
-    ClientId is the well-known Microsoft Graph Command Line Tools app
+    Supports two sign-in flows — device code or interactive browser (PKCE).
+    Only requires TenantId and ClientId. No client secret is needed.
+    The default ClientId is the well-known Microsoft Graph Command Line Tools app
     (14d82eec-204b-4c2f-b7e8-296a70dab67e), which has Chat.Read pre-consented
     in most tenants.
+    Device code flow: displays a short code to enter at https://microsoft.com/devicelogin.
+    Browser flow (-BrowserAuth): opens a browser window for direct sign-in —
+      useful when device code flow is blocked by Conditional Access policies.
 
   App-only (used when ClientSecret is supplied):
     Uses the OAuth 2.0 client credentials flow. Requires TenantId, ClientId,
@@ -46,12 +51,22 @@ Creates a TeamsExportConfig.json file in the script folder with setup instructio
 and placeholders for TenantId, ClientId, ClientSecret, and AuthMode.
 
 .PARAMETER Interactive
-Runs a guided interactive setup using delegated (device code) authentication.
+Runs a guided interactive setup using delegated authentication.
 Only TenantId and ClientId are required — no client secret.
+By default uses device code flow; add -BrowserAuth to use interactive browser sign-in.
+
+.PARAMETER BrowserAuth
+When combined with -Interactive or -Delegated, uses the OAuth 2.0 Authorization Code flow
+with PKCE (opens a real browser window) instead of the device code flow.
+Useful on tenants that block device code / legacy authentication.
+A local HTTP listener is started on a loopback port (8400–8420) to receive the redirect.
+Requires the redirect URI http://localhost:<port> to be registered on the app registration,
+or use the default Microsoft Graph Command Line Tools client ID which supports loopback URIs.
 
 .PARAMETER Delegated
-Forces delegated (device code) authentication even when running non-interactively
+Forces delegated authentication even when running non-interactively
 (i.e. when TenantId and ClientId are passed as parameters but ClientSecret is not).
+Pair with -BrowserAuth to use the interactive browser flow instead of device code.
 
 .EXAMPLE
 PS> .\Export-TeamsChat.ps1 -ConfigFile
@@ -59,7 +74,16 @@ Creates the configuration template file TeamsExportConfig.json next to the scrip
 
 .EXAMPLE
 PS> .\Export-TeamsChat.ps1 -Interactive
-Starts the guided mode with delegated (device code) sign-in. No client secret required.
+Starts the guided mode with delegated sign-in. You will be prompted to choose between
+device code flow and interactive browser sign-in.
+
+.EXAMPLE
+PS> .\Export-TeamsChat.ps1 -Interactive -BrowserAuth
+Starts the guided mode and uses browser-based interactive sign-in (no device code).
+
+.EXAMPLE
+PS> .\Export-TeamsChat.ps1 -TenantId "<tenantId>" -ClientId "<clientId>" -BrowserAuth -TeamsUrl "https://teams.microsoft.com/l/chat/..."
+Authenticates via interactive browser sign-in (PKCE) and exports the specified chat to TXT.
 
 .EXAMPLE
 PS> .\Export-TeamsChat.ps1 -TenantId "<tenantId>" -ClientId "<clientId>" -TeamsUrl "https://teams.microsoft.com/l/chat/..."
@@ -84,19 +108,22 @@ String. Returns the full file path of the exported file.
 - App-only mode uses Chat.Read.All and requires admin consent.
 - Accepts a Teams chat deep link; the script extracts the 19:...@thread.v2 or ...@unq chat ID.
 - Handles pagination to retrieve all messages for large chats.
+- Compatible with PowerShell 5.1 and PowerShell 7+.
 
 .NOTES
 Author: Michael Mardahl (GitHub: https://github.com/mardahl)
-Version: 1.1.0
-Last Updated: 2026-04-08
+Version: 1.2.0
+Last Updated: 2026-04-24
 LLM: ChatGPT 5 and Claude 4
 Work: Consultant for hire via inciro.com
 License: Prosperity Public License 3.0.0 (noncommercial + 30-day commercial trial). Commercial licensing and consulting: https://inciro.com
 
 Requirements:
-- PowerShell 7+
+- PowerShell 5.1+ (both Windows PowerShell and PowerShell 7+ are supported)
 - Delegated mode: Chat.Read delegated permission (pre-consented on the default app ID in most tenants)
 - App-only mode: Chat.Read.All application permission with admin consent
+- Browser auth (-BrowserAuth): redirect URI http://localhost:<port> must be registered on the app,
+  or use the default Microsoft Graph Command Line Tools client ID
 - The script uses Microsoft Graph v1.0 at https://graph.microsoft.com/v1.0
 Config file path: $PSScriptRoot\TeamsExportConfig.json
 
@@ -110,7 +137,7 @@ https://github.com/mardahl
 https://prosperitylicense.com/versions/3.0.0
 #>
 
-#requires -Version 7.0
+#requires -Version 5.1
 
 param(
     [Parameter(Mandatory = $false)]
@@ -137,6 +164,9 @@ param(
 
     [Parameter(Mandatory = $false)]
     [switch]$Interactive,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$BrowserAuth,
 
     [Parameter(Mandatory = $false)]
     [switch]$Delegated
@@ -302,8 +332,8 @@ function Get-DelegatedAccessToken {
     Write-Host ""
 
     # Step 3 — poll for token
-    $interval   = [int]($dcResponse.interval ?? 5)
-    $expiresSec = [int]($dcResponse.expires_in ?? 900)
+    $interval   = if ($null -ne $dcResponse.interval)   { [int]$dcResponse.interval }   else { 5 }
+    $expiresSec = if ($null -ne $dcResponse.expires_in) { [int]$dcResponse.expires_in } else { 900 }
     $deadline   = (Get-Date).AddSeconds($expiresSec)
     $deviceCode = $dcResponse.device_code
 
@@ -372,8 +402,154 @@ function Get-DelegatedAccessToken {
 }
 
 # ---------------------------------------------------------------------------
-# Graph / chat helpers (unchanged)
+# Authentication: delegated (interactive browser / authorization code + PKCE)
+# Compatible with PowerShell 5.1 and PowerShell 7+
 # ---------------------------------------------------------------------------
+
+function Get-InteractiveBrowserToken {
+    param(
+        [string]$TenantId,
+        [string]$ClientId,
+        [int]$TimeoutSeconds = 300
+    )
+
+    $scope    = "https://graph.microsoft.com/Chat.Read offline_access"
+    $tokenUrl = "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/token"
+
+    # --- PKCE: generate a cryptographically random code_verifier ---
+    $rng           = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $verifierBytes = New-Object byte[] 32
+    $rng.GetBytes($verifierBytes)
+    $rng.Dispose()
+    $codeVerifier = [Convert]::ToBase64String($verifierBytes) -replace '\+', '-' -replace '/', '_' -replace '=', ''
+
+    # Derive code_challenge = BASE64URL( SHA256( ASCII(code_verifier) ) )
+    $sha256         = New-Object System.Security.Cryptography.SHA256Managed
+    $challengeBytes = $sha256.ComputeHash([System.Text.Encoding]::ASCII.GetBytes($codeVerifier))
+    $sha256.Dispose()
+    $codeChallenge = [Convert]::ToBase64String($challengeBytes) -replace '\+', '-' -replace '/', '_' -replace '=', ''
+
+    # --- Find an available loopback TCP port (8400–8420) ---
+    $listener = $null
+    $port     = 8400
+    while ($port -le 8420) {
+        try {
+            $candidate = New-Object System.Net.HttpListener
+            $candidate.Prefixes.Add("http://localhost:$port/")
+            $candidate.Start()
+            $listener = $candidate
+            break
+        }
+        catch {
+            if ($null -ne $candidate) { $candidate.Close() }
+            $port++
+        }
+    }
+
+    if (-not $listener) {
+        throw "❌ Could not start a local HTTP listener on ports 8400–8420. Free one of those ports and try again."
+    }
+
+    $redirectUri = "http://localhost:$port"
+
+    # --- Build authorization URL ---
+    $queryParts = @(
+        "client_id=$([uri]::EscapeDataString($ClientId))",
+        "response_type=code",
+        "redirect_uri=$([uri]::EscapeDataString($redirectUri))",
+        "scope=$([uri]::EscapeDataString($scope))",
+        "code_challenge=$codeChallenge",
+        "code_challenge_method=S256",
+        "response_mode=query"
+    )
+    $authUrl = "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/authorize?" + ($queryParts -join '&')
+
+    Write-Host ""
+    Write-Host "═══════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "  Browser sign-in" -ForegroundColor Yellow
+    Write-Host "═══════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  Opening your browser for Microsoft sign-in..." -ForegroundColor White
+    Write-Host "  If the browser does not open automatically, visit:" -ForegroundColor White
+    Write-Host "  $authUrl" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  Waiting for sign-in (timeout: ${TimeoutSeconds}s)..." -ForegroundColor Gray
+    Write-Host "═══════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host ""
+
+    # --- Open the default browser (PS5.1 on Windows + PS7 cross-platform) ---
+    $onWindows = if ($null -ne $IsWindows) { $IsWindows } else { $true }
+    $onMacOS   = if ($null -ne $IsMacOS)   { $IsMacOS }   else { $false }
+
+    try {
+        if ($onWindows) {
+            Start-Process $authUrl
+        } elseif ($onMacOS) {
+            Start-Process "open" -ArgumentList $authUrl
+        } else {
+            Start-Process "xdg-open" -ArgumentList $authUrl
+        }
+    }
+    catch {
+        Write-Host "⚠️  Could not open browser automatically. Please open the URL above manually." -ForegroundColor Yellow
+    }
+
+    # --- Wait for the OAuth redirect callback with timeout ---
+    $asyncResult = $listener.BeginGetContext($null, $null)
+    $signaled    = $asyncResult.AsyncWaitHandle.WaitOne([System.TimeSpan]::FromSeconds($TimeoutSeconds))
+
+    if (-not $signaled) {
+        $listener.Stop()
+        throw "❌ Browser sign-in timed out after ${TimeoutSeconds} seconds. Please run the script again."
+    }
+
+    $context  = $listener.EndGetContext($asyncResult)
+    $request  = $context.Request
+    $response = $context.Response
+
+    # Return a friendly page to the browser
+    $successHtml   = "<html><body style='font-family:sans-serif;text-align:center;padding:40px'><h2>&#x2705; Sign-in complete!</h2><p>You can close this browser tab and return to your terminal.</p></body></html>"
+    $responseBytes = [System.Text.Encoding]::UTF8.GetBytes($successHtml)
+    $response.ContentType       = "text/html; charset=utf-8"
+    $response.ContentLength64   = $responseBytes.Length
+    $response.OutputStream.Write($responseBytes, 0, $responseBytes.Length)
+    $response.Close()
+    $listener.Stop()
+
+    # --- Extract authorization code or error from the redirect URL ---
+    $code      = $request.QueryString["code"]
+    $authError = $request.QueryString["error"]
+
+    if ($authError) {
+        $errDesc = $request.QueryString["error_description"]
+        throw "❌ Authorization failed: $authError — $errDesc"
+    }
+
+    if (-not $code) {
+        throw "❌ No authorization code received from Microsoft. Ensure the redirect URI '$redirectUri' is registered on your app registration."
+    }
+
+    # --- Exchange the authorization code for an access token ---
+    $tokenBody = @{
+        client_id     = $ClientId
+        code          = $code
+        redirect_uri  = $redirectUri
+        grant_type    = "authorization_code"
+        code_verifier = $codeVerifier
+        scope         = $scope
+    }
+
+    try {
+        $tokenResponse = Invoke-RestMethod -Uri $tokenUrl -Method POST -ContentType "application/x-www-form-urlencoded" -Body $tokenBody
+        Write-Host "✅ Browser sign-in successful!" -ForegroundColor Green
+        return $tokenResponse.access_token
+    }
+    catch {
+        $detail = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { $_.Exception.Message }
+        throw "❌ Token exchange failed: $detail"
+    }
+}
+
 
 function Get-ChatIdFromUrl {
     param([string]$TeamsUrl)
@@ -810,7 +986,7 @@ function Resolve-OutputPath {
 }
 
 # ---------------------------------------------------------------------------
-# Interactive mode — delegated auth (device code flow)
+# Interactive mode — delegated auth (device code or browser)
 # ---------------------------------------------------------------------------
 
 function Start-InteractiveMode {
@@ -840,9 +1016,23 @@ function Start-InteractiveMode {
 
     $savedTeamsUrl = if (-not [string]::IsNullOrWhiteSpace($TeamsUrl)) { $TeamsUrl } else { $null }
 
-    Write-Host "`nThis guided mode uses delegated authentication (device code flow)." -ForegroundColor Gray
-    Write-Host "You will be asked to sign in with your Microsoft 365 account in a browser." -ForegroundColor Gray
-    Write-Host "No client secret is required." -ForegroundColor Gray
+    Write-Host "`nThis guided mode uses delegated authentication — no client secret required." -ForegroundColor Gray
+    Write-Host "You will sign in with your Microsoft 365 account." -ForegroundColor Gray
+
+    # --- Choose sign-in method (skip prompt when -BrowserAuth was passed explicitly) ---
+    if ($BrowserAuth) {
+        $script:UseBrowserAuth = $true
+    } else {
+        Write-Host "`n🔐 Choose sign-in method" -ForegroundColor Yellow
+        Write-Host "  Device code flow works on most tenants; use Browser sign-in if device code" -ForegroundColor Gray
+        Write-Host "  is blocked by your organisation's Conditional Access policies." -ForegroundColor Gray
+        Write-Host ""
+        $authMethodChoice = Get-ChoiceInput -Prompt "Sign-in method" -DefaultKey "1" -Options @(
+            @{ Key = "1"; Label = "Device code  — display a short code to enter in your browser"; Value = "DeviceCode" },
+            @{ Key = "2"; Label = "Browser      — open a sign-in window directly in your browser"; Value = "Browser" }
+        )
+        $script:UseBrowserAuth = ($authMethodChoice -eq "Browser")
+    }
 
     Write-Host "`n🔐 Sign-in configuration" -ForegroundColor Yellow
 
@@ -850,13 +1040,17 @@ function Start-InteractiveMode {
     $script:TenantId = Get-SecureInput "Tenant ID" -DefaultValue $savedTenantId -Required
 
     # Client ID (default = well-known MS Graph Command Line Tools app)
-    $clientIdPrompt = "Client ID [Microsoft Graph Command Line Tools (default)]"
+    $clientIdPrompt  = "Client ID [Microsoft Graph Command Line Tools (default)]"
     $enteredClientId = Get-SecureInput $clientIdPrompt -DefaultValue $savedClientId
     $script:ClientId = if ([string]::IsNullOrWhiteSpace($enteredClientId)) { $script:DefaultDelegatedClientId } else { $enteredClientId }
 
     # Authenticate immediately so the token is ready before we ask for more inputs
     Write-Host ""
-    $script:AccessToken = Get-DelegatedAccessToken -TenantId $script:TenantId -ClientId $script:ClientId
+    if ($script:UseBrowserAuth) {
+        $script:AccessToken = Get-InteractiveBrowserToken -TenantId $script:TenantId -ClientId $script:ClientId
+    } else {
+        $script:AccessToken = Get-DelegatedAccessToken -TenantId $script:TenantId -ClientId $script:ClientId
+    }
     Write-Host ""
 
     Write-Host "`n💬 Chat selection" -ForegroundColor Yellow
@@ -882,8 +1076,9 @@ function Start-InteractiveMode {
 
     $script:OutputPath = Resolve-OutputPath (Get-SecureInput "Output directory" -DefaultValue $OutputPath)
 
+    $authMethodLabel  = if ($script:UseBrowserAuth) { "Delegated — browser sign-in (PKCE)" } else { "Delegated — device code flow" }
     Write-Host "`n📝 Summary" -ForegroundColor Yellow
-    Write-Host "Auth mode     : Delegated (signed in as user)"
+    Write-Host "Auth mode     : $authMethodLabel"
     Write-Host "Tenant ID     : $script:TenantId"
     Write-Host "Client ID     : $script:ClientId"
     Write-Host "Teams chat URL: $script:TeamsUrl"
@@ -928,8 +1123,8 @@ function Start-TeamsExport {
         $script:ClientSecret = if (-not [string]::IsNullOrEmpty($ClientSecret)) { $ClientSecret } elseif ($config) { $config.ClientSecret } else { $null }
     }
 
-    $script:ExportFormat = $script:ExportFormat ?? $ExportFormat
-    $script:OutputPath   = $script:OutputPath   ?? $OutputPath
+    if (-not $script:ExportFormat) { $script:ExportFormat = $ExportFormat }
+    if (-not $script:OutputPath)   { $script:OutputPath   = $OutputPath   }
 
     # Determine auth mode
     # Priority: explicit $Delegated switch > presence of ClientSecret > config AuthMode
@@ -982,6 +1177,8 @@ function Start-TeamsExport {
         if (-not $script:AccessToken) {
             if ($useAppOnly) {
                 $script:AccessToken = Get-AccessToken -TenantId $script:TenantId -ClientId $script:ClientId -ClientSecret $script:ClientSecret
+            } elseif ($BrowserAuth -or $script:UseBrowserAuth) {
+                $script:AccessToken = Get-InteractiveBrowserToken -TenantId $script:TenantId -ClientId $script:ClientId
             } else {
                 $script:AccessToken = Get-DelegatedAccessToken -TenantId $script:TenantId -ClientId $script:ClientId
             }
@@ -1021,7 +1218,8 @@ function Start-TeamsExport {
         Write-Output $exportedFile
 
         # Open the output directory on Windows
-        if ($IsWindows) {
+        $onWin = if ($null -ne $IsWindows) { $IsWindows } else { $true }
+        if ($onWin) {
             Write-Host "`n💡 Opening output directory..." -ForegroundColor Yellow
             Start-Process explorer.exe -ArgumentList (Split-Path $exportedFile -Parent)
         }
@@ -1075,36 +1273,47 @@ if (-not $PSBoundParameters.Count -and -not $Interactive) {
 1. 🔧 Create configuration file:
    .\Export-TeamsChat.ps1 -ConfigFile
 
-2. 🖱️ Interactive mode — delegated sign-in (no secret needed):
+2. 🖱️ Interactive mode — guided delegated sign-in (choose device code or browser):
    .\Export-TeamsChat.ps1 -Interactive
 
-3. 🔑 Delegated (device code) — non-interactive:
+3. 🌐 Interactive mode — force browser sign-in (skips the device code prompt):
+   .\Export-TeamsChat.ps1 -Interactive -BrowserAuth
+
+4. 🔑 Delegated (device code) — non-interactive:
    .\Export-TeamsChat.ps1 -TenantId "your-tenant-id" -TeamsUrl "https://teams.microsoft.com/l/chat/..."
 
-4. 🏢 App-only (client credentials):
+5. 🌐 Delegated (browser sign-in) — non-interactive:
+   .\Export-TeamsChat.ps1 -TenantId "your-tenant-id" -BrowserAuth -TeamsUrl "https://teams.microsoft.com/l/chat/..."
+
+6. 🏢 App-only (client credentials):
    .\Export-TeamsChat.ps1 -TenantId "your-tenant-id" -ClientId "your-client-id" -ClientSecret "your-secret" -TeamsUrl "https://teams.microsoft.com/l/chat/..."
 
-5. 📄 Using config file:
+7. 📄 Using config file:
    .\Export-TeamsChat.ps1 -TeamsUrl "https://teams.microsoft.com/l/chat/..." -ExportFormat JSON
 
-6. 📁 Custom output location:
+8. 📁 Custom output location:
    .\Export-TeamsChat.ps1 -TeamsUrl "..." -OutputPath "C:\Exports" -ExportFormat HTML
 
 🎯 PARAMETERS:
    -TenantId       : Microsoft Entra ID tenant ID
    -ClientId       : App registration Client ID (delegated default: Microsoft Graph Command Line Tools)
-   -ClientSecret   : App registration Client Secret (omit to use delegated device code flow)
+   -ClientSecret   : App registration Client Secret (omit to use delegated auth)
    -TeamsUrl       : Microsoft Teams chat URL
    -ExportFormat   : TXT, JSON, HTML, or CSV (default: TXT)
    -OutputPath     : Export directory (default: current directory)
    -ConfigFile     : Create configuration template
    -Interactive    : Run in guided interactive mode (delegated sign-in)
-   -Delegated      : Force delegated (device code) auth in non-interactive mode
+   -BrowserAuth    : Use interactive browser sign-in (PKCE) instead of device code flow
+   -Delegated      : Force delegated auth in non-interactive mode
 
 🔐 AUTH MODES:
    Delegated  — Default for -Interactive and when no ClientSecret is given.
-                Signs in as a user via browser. Requires only TenantId (+ClientId optional).
+                Signs in as a user. Requires only TenantId (+ClientId optional).
                 Uses Chat.Read delegated scope (no admin consent required in most tenants).
+                Two flows available:
+                  • Device code  — display a code to enter in the browser (default)
+                  • Browser PKCE — opens a browser window directly (-BrowserAuth)
+                    Use this if device code flow is blocked by Conditional Access.
    App-only   — Used when ClientSecret is provided.
                 Uses client credentials flow. Requires Chat.Read.All with admin consent.
 
