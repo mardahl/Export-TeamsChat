@@ -176,6 +176,10 @@ param(
 # Default ClientId for delegated auth (Microsoft Graph Command Line Tools enterprise app)
 $script:DefaultDelegatedClientId = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
 
+# Tenant endpoint used when no specific tenant ID is supplied; MS identity platform
+# routes the sign-in to the correct tenant automatically.
+$script:CommonTenantEndpoint = "common"
+
 # Configuration file path
 $ConfigFilePath = Join-Path $PSScriptRoot "TeamsExportConfig.json"
 
@@ -564,7 +568,7 @@ function Get-TenantIdFromToken {
         $parts = $AccessToken.Split('.')
         if ($parts.Count -lt 2) { return $null }
         $payload = $parts[1]
-        # Base64url → standard base64
+        # Base64url → standard base64: pad to a multiple of 4 with '=' characters
         $padded  = $payload.PadRight($payload.Length + (4 - $payload.Length % 4) % 4, '=')
         $decoded = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($padded))
         $claims  = $decoded | ConvertFrom-Json
@@ -1064,7 +1068,7 @@ function Start-InteractiveMode {
     # Tenant ID — optional in delegated mode.
     # Using 'common' lets Microsoft route the sign-in to the correct tenant automatically;
     # the real tenant ID is then extracted from the returned access token.
-    $tenantIdDefault = if (-not [string]::IsNullOrWhiteSpace($savedTenantId)) { $savedTenantId } else { "common" }
+    $tenantIdDefault = if (-not [string]::IsNullOrWhiteSpace($savedTenantId)) { $savedTenantId } else { $script:CommonTenantEndpoint }
     Write-Host "  (Leave blank or press Enter to use 'common' — tenant ID will be detected from your session)" -ForegroundColor Gray
     $script:TenantId = Get-SecureInput "Tenant ID" -DefaultValue $tenantIdDefault
 
@@ -1082,7 +1086,7 @@ function Start-InteractiveMode {
     }
 
     # Auto-detect the real tenant ID from the JWT when 'common' was used or no ID was supplied
-    if ([string]::IsNullOrWhiteSpace($script:TenantId) -or $script:TenantId -eq "common") {
+    if ([string]::IsNullOrWhiteSpace($script:TenantId) -or $script:TenantId -eq $script:CommonTenantEndpoint) {
         $detectedTenantId = Get-TenantIdFromToken -AccessToken $script:AccessToken
         if ($detectedTenantId) {
             $script:TenantId = $detectedTenantId
@@ -1190,7 +1194,7 @@ function Start-TeamsExport {
             $script:ClientId = $script:DefaultDelegatedClientId
         }
         if ([string]::IsNullOrWhiteSpace($script:TenantId)) {
-            $script:TenantId = "common"
+            $script:TenantId = $script:CommonTenantEndpoint
         }
     }
 
@@ -1218,7 +1222,7 @@ function Start-TeamsExport {
             }
 
             # Auto-detect the real tenant ID from the JWT when 'common' was used
-            if (-not $useAppOnly -and ($script:TenantId -eq "common")) {
+            if (-not $useAppOnly -and ($script:TenantId -eq $script:CommonTenantEndpoint)) {
                 $detectedTenantId = Get-TenantIdFromToken -AccessToken $script:AccessToken
                 if ($detectedTenantId) {
                     $script:TenantId = $detectedTenantId
