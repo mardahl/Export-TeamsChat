@@ -322,12 +322,19 @@ function Get-DelegatedAccessToken {
             return $tokenResponse.access_token
         }
         catch {
-            # Parse the error from the response body
+            # Parse the error from the response body.
+            # PowerShell 7+ surfaces the body in $_.ErrorDetails.Message; PS 5.x
+            # requires reading the response stream directly.
             $rawError = $null
             try {
-                $stream = $_.Exception.Response.GetResponseStream()
-                $reader = New-Object System.IO.StreamReader($stream)
-                $rawError = $reader.ReadToEnd() | ConvertFrom-Json
+                $errorBody = if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+                    $_.ErrorDetails.Message
+                } else {
+                    $stream = $_.Exception.Response.GetResponseStream()
+                    $reader = New-Object System.IO.StreamReader($stream)
+                    $reader.ReadToEnd()
+                }
+                $rawError = $errorBody | ConvertFrom-Json
             }
             catch { <# ignore parse errors #> }
 
