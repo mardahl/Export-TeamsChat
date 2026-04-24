@@ -591,11 +591,13 @@ function Get-ChatIdFromUrl {
         } catch { $decoded = $TeamsUrl }
 
         # Try several known patterns:
+        # NOTE: unq.gbl.spaces must appear before unq so the longer suffix wins.
+        $suffix = '(?:thread\.v2|unq\.gbl\.spaces|unq)'
         $patterns = @(
-            '/l/chat/(?<id>19:[^/?]+@(thread\.v2|unq))',            # /l/chat/19:...@thread.v2/...
-            '/conversations/(?<id>19:[^/?]+@(thread\.v2|unq))',     # .../conversations/19:...@thread.v2?
-            'chatid=(?<id>19:[^&]+@(thread\.v2|unq))',              # ...chatid=19:...@unq
-            '(?<id>19:[A-Za-z0-9\-_]+@(thread\.v2|unq))'            # bare fallback
+            "/l/chat/(?<id>19:[^/?]+@$suffix)",            # /l/chat/19:...@thread.v2/...  or  @unq.gbl.spaces/...
+            "/conversations/(?<id>19:[^/?]+@$suffix)",     # .../conversations/19:...@thread.v2?
+            "chatid=(?<id>19:[^&]+@$suffix)",              # ...chatid=19:...@unq
+            "(?<id>19:[A-Za-z0-9\-_]+@$suffix)"            # bare fallback
         )
 
         foreach ($p in $patterns) {
