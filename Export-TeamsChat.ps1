@@ -804,6 +804,28 @@ function Get-ExtensionFromMimeType {
     return $DefaultExtension
 }
 
+function Get-ExtensionFromUrlPath {
+    param(
+        [string]$Uri,
+        [string]$DefaultExtension = ".bin"
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Uri)) {
+        return $DefaultExtension
+    }
+
+    try {
+        $uriObject = [System.Uri]$Uri
+        $extension = [System.IO.Path]::GetExtension($uriObject.AbsolutePath)
+        if (-not [string]::IsNullOrWhiteSpace($extension)) {
+            return $extension
+        }
+    }
+    catch { }
+
+    return $DefaultExtension
+}
+
 function Get-SafeAssetFileName {
     param(
         [string]$PreferredName,
@@ -925,8 +947,16 @@ function Save-GraphHostedContentAsset {
 
     try {
         $response = Invoke-DownloadRequest -Uri $uri -OutFile $temporaryFilePath -Headers @{ Authorization = "Bearer $AccessToken" }
-        $contentType = if ($response.Headers['Content-Type']) { $response.Headers['Content-Type'] } else { $null }
-        $extension = Get-ExtensionFromMimeType -MimeType $contentType
+        $contentType = $null
+        if ($null -ne $response -and $null -ne $response.Headers) {
+            $contentType = $response.Headers['Content-Type']
+        }
+
+        $extension = if (-not [string]::IsNullOrWhiteSpace($contentType)) {
+            Get-ExtensionFromMimeType -MimeType $contentType
+        } else {
+            Get-ExtensionFromUrlPath -Uri $uri -DefaultExtension ".bin"
+        }
         $fileName = Get-SafeAssetFileName -PreferredName $PreferredFileName -FallbackBaseName $HostedContentId -Extension $extension -AssetsPath $AssetsPath
         $finalPath = Join-Path $AssetsPath $fileName
 
