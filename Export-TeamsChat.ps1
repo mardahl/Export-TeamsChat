@@ -947,26 +947,6 @@ function Save-GraphHostedContentAsset {
     }
 }
 
-function Get-AttachmentDownloadUrl {
-    param([object]$Attachment)
-
-    if ($Attachment -and $Attachment.content -is [string] -and -not [string]::IsNullOrWhiteSpace($Attachment.content)) {
-        foreach ($propertyName in @('downloadUrl', 'downloadurl', 'contentUrl', 'contenturl')) {
-            $pattern = '"{0}"\s*:\s*"(?<url>https?://[^"\\]+)"' -f [regex]::Escape($propertyName)
-            $match = [regex]::Match($Attachment.content, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
-            if ($match.Success) {
-                return $match.Groups['url'].Value -replace '\\/','/'
-            }
-        }
-    }
-
-    if ($Attachment -and -not [string]::IsNullOrWhiteSpace($Attachment.contentUrl)) {
-        return $Attachment.contentUrl
-    }
-
-    return $null
-}
-
 function Get-LocalizedAssetReferences {
     param([object]$Message)
 
@@ -987,70 +967,7 @@ function Get-LocalizedAssetReferences {
         }
     }
 
-    foreach ($attachment in @($Message.attachments)) {
-        if ($attachment -and -not [string]::IsNullOrWhiteSpace($attachment.contentUrl) -and $attachment.contentUrl -match '-assets/') {
-            if ($references -notcontains $attachment.contentUrl) {
-                $references += $attachment.contentUrl
-            }
-        }
-    }
-
     return $references
-}
-
-function Save-UrlAsset {
-    param(
-        [string]$Uri,
-        [string]$AssetsPath,
-        [string]$RelativeAssetsPath,
-        [string]$PreferredFileName,
-        [string]$FallbackBaseName,
-        [string]$ContentTypeHint,
-        [string]$AccessToken
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Uri)) {
-        return $null
-    }
-
-    if (-not (Test-Path $AssetsPath)) {
-        New-Item -ItemType Directory -Path $AssetsPath -Force | Out-Null
-    }
-
-    $headers = @{}
-    try {
-        $parsedUri = [System.Uri]$Uri
-        if ($parsedUri.Host -eq 'graph.microsoft.com' -and -not [string]::IsNullOrWhiteSpace($AccessToken)) {
-            $headers.Authorization = "Bearer $AccessToken"
-        }
-    }
-    catch { }
-
-    $temporaryFilePath = Join-Path $AssetsPath ([System.Guid]::NewGuid().ToString() + ".download")
-
-    try {
-        $response = Invoke-DownloadRequest -Uri $Uri -OutFile $temporaryFilePath -Headers $headers
-        $contentType = if ($response.Headers['Content-Type']) { $response.Headers['Content-Type'] } else { $ContentTypeHint }
-        $extension = Get-ExtensionFromMimeType -MimeType $contentType
-        $fallbackName = if (-not [string]::IsNullOrWhiteSpace($FallbackBaseName)) { $FallbackBaseName } else { [System.Guid]::NewGuid().ToString() }
-        $fileName = Get-SafeAssetFileName -PreferredName $PreferredFileName -FallbackBaseName $fallbackName -Extension $extension -AssetsPath $AssetsPath
-        $finalPath = Join-Path $AssetsPath $fileName
-
-        Move-Item -Path $temporaryFilePath -Destination $finalPath -Force
-
-        return @{
-            FilePath     = $finalPath
-            RelativePath = "{0}/{1}" -f $RelativeAssetsPath, $fileName
-        }
-    }
-    catch {
-        if (Test-Path $temporaryFilePath) {
-            Remove-Item $temporaryFilePath -Force -ErrorAction SilentlyContinue
-        }
-
-        Write-Warning "Failed to download attachment '$PreferredFileName' from '$Uri': $($_.Exception.Message)"
-        return $null
-    }
 }
 
 function Update-MessageAssets {
@@ -1099,41 +1016,6 @@ function Update-MessageAssets {
                 if ($downloadedHostedContent.ContainsKey($hostedContentId)) {
                     $messageContent = $messageContent.Replace($match.Groups['url'].Value, $downloadedHostedContent[$hostedContentId])
                 }
-            }
-        }
-
-        foreach ($attachment in @($message.attachments)) {
-            $downloadUrl = Get-AttachmentDownloadUrl -Attachment $attachment
-            if ([string]::IsNullOrWhiteSpace($downloadUrl)) {
-                continue
-            }
-
-            $attachmentName = if (-not [string]::IsNullOrWhiteSpace($attachment.name)) { $attachment.name } else { $null }
-            $downloadResult = Save-UrlAsset -Uri $downloadUrl -AssetsPath $assetDirectoryInfo.Directory -RelativeAssetsPath $assetDirectoryInfo.RelativeDirectory -PreferredFileName $attachmentName -FallbackBaseName $attachment.id -ContentTypeHint $attachment.contentType -AccessToken $AccessToken
-
-            if (-not $downloadResult) {
-                continue
-            }
-
-            $referenceUrls = @()
-            foreach ($candidateUrl in @($downloadUrl, $attachment.contentUrl, $attachment.thumbnailUrl)) {
-                if (-not [string]::IsNullOrWhiteSpace($candidateUrl) -and ($referenceUrls -notcontains $candidateUrl)) {
-                    $referenceUrls += $candidateUrl
-                }
-            }
-
-            foreach ($referenceUrl in $referenceUrls) {
-                if (-not [string]::IsNullOrWhiteSpace($messageContent)) {
-                    $messageContent = $messageContent.Replace($referenceUrl, $downloadResult.RelativePath)
-                }
-
-                if ($attachment.PSObject.Properties['content'] -and $attachment.content -is [string]) {
-                    $attachment.content = $attachment.content.Replace($referenceUrl, $downloadResult.RelativePath)
-                }
-            }
-
-            if ($attachment.PSObject.Properties['contentUrl']) {
-                $attachment.contentUrl = $downloadResult.RelativePath
             }
         }
 

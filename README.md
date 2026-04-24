@@ -4,7 +4,7 @@ Export Microsoft Teams chat conversations to TXT, JSON, HTML, or CSV using the M
 
 ## Features
 - Export formats: TXT, JSON, HTML, CSV
-- Downloads inline hosted images and file attachments, then rewrites message references to local relative paths
+- Downloads inline hosted images so exported chats keep their visual context offline
 - **Delegated auth — device code flow** — enter a short code in your browser; no admin consent required
 - **Delegated auth — browser sign-in (PKCE)** — opens a real browser window for direct sign-in; useful when device code flow is blocked by Conditional Access policies
 - **App-only auth (client credentials)** — tenant-wide access for admin/automation scenarios
@@ -176,11 +176,12 @@ Tip: Links typically look like https://teams.microsoft.com/l/chat/... and contai
 
 ## Output
 - The script writes the exported file to disk and also outputs the full file path to the pipeline (stdout).
-- When inline images or file attachments are found, the script downloads them into a sibling folder named `{export-filename-without-extension}-assets`.
+- When inline hosted images are found, the script downloads them into a sibling folder named `{export-filename-without-extension}-assets`.
 - Example: `teams-chat-export-2026-04-24-1530.html` produces `teams-chat-export-2026-04-24-1530-assets/` in the same directory.
 - HTML output rewrites `src` and `href` references to those local relative asset paths.
-- JSON output preserves the rewritten message HTML and localized attachment URLs.
+- JSON output preserves the rewritten message HTML.
 - TXT and CSV output include localized asset paths alongside the message text when assets were downloaded.
+- File attachments are left as their original links and are not downloaded.
 - If an asset download fails, the script logs a warning and continues the export.
 
 ## Notes
