@@ -724,6 +724,48 @@ function Format-DisplayDate {
     }
 }
 
+function Format-ParticipantList {
+    param([array]$Members)
+
+    if (-not $Members -or $Members.Count -eq 0) {
+        return ""
+    }
+
+    $participants = foreach ($member in $Members) {
+        $displayName = if (-not [string]::IsNullOrWhiteSpace($member.displayName)) {
+            [string]$member.displayName
+        } else {
+            "Unknown participant"
+        }
+
+        $email = if (-not [string]::IsNullOrWhiteSpace($member.email)) {
+            [string]$member.email
+        } else {
+            $null
+        }
+
+        $tenantId = if (-not [string]::IsNullOrWhiteSpace($member.tenantId)) {
+            [string]$member.tenantId
+        } else {
+            $null
+        }
+
+        $participantLabel = if ($email) {
+            "{0} <{1}>" -f $displayName, $email
+        } else {
+            $displayName
+        }
+
+        if ($tenantId) {
+            "{0} [tenant: {1}]" -f $participantLabel, $tenantId
+        } else {
+            $participantLabel
+        }
+    }
+
+    return ($participants -join ', ')
+}
+
 # ---------------------------------------------------------------------------
 # Asset localization helpers
 # ---------------------------------------------------------------------------
@@ -1079,8 +1121,9 @@ Microsoft Teams Chat Export
 
 Chat Information:
 - Chat Type: $($ChatData.chatType)
+- Exported From Tenant: $($ChatData.exportTenantId)
 - Created: $(Format-DisplayDate $ChatData.createdDateTime)
-- Participants: $($ChatData.members.displayName -join ', ')
+- Participants: $(Format-ParticipantList -Members $ChatData.members)
 - Total Messages: $($Messages.Count)
 - Chat ID: $($ChatData.id)
 
@@ -1321,8 +1364,9 @@ function Export-ToHTML {
             <h2>Chat Details</h2>
             <ul class="info-list">
                 <li><strong>Type:</strong> $($ChatData.chatType)</li>
+                <li><strong>Exported From Tenant:</strong> <code>$($ChatData.exportTenantId)</code></li>
                 <li><strong>Created:</strong> $(Format-DisplayDate $ChatData.createdDateTime)</li>
-                <li><strong>Participants:</strong> $($ChatData.members.displayName -join ', ')</li>
+                <li><strong>Participants:</strong> $(Format-ParticipantList -Members $ChatData.members)</li>
                 <li><strong>Messages:</strong> $($Messages.Count)</li>
                 <li><strong>Chat ID:</strong> <code>$($ChatData.id)</code></li>
             </ul>
@@ -1735,9 +1779,11 @@ function Start-TeamsExport {
         # Get chat members
         $membersResponse = Invoke-MsGraphRequest -Endpoint "/chats/$([uri]::EscapeDataString($chatId))/members" -AccessToken $accessToken
         $chatData | Add-Member -NotePropertyName "members" -NotePropertyValue $membersResponse.value
+        $chatData | Add-Member -NotePropertyName "exportTenantId" -NotePropertyValue $script:TenantId
 
         Write-Host "✅ Chat Type: $($chatData.chatType)" -ForegroundColor Green
-        Write-Host "✅ Participants: $($chatData.members.displayName -join ', ')" -ForegroundColor Green
+        Write-Host "✅ Exported from tenant: $($chatData.exportTenantId)" -ForegroundColor Green
+        Write-Host "✅ Participants: $(Format-ParticipantList -Members $chatData.members)" -ForegroundColor Green
 
         # Get all messages
         $messages = Get-AllChatMessages -ChatId $chatId -AccessToken $accessToken
