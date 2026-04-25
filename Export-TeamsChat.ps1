@@ -246,7 +246,7 @@ function Get-Configuration {
             return Get-Content $ConfigFilePath | ConvertFrom-Json
         }
         catch {
-            Write-Error "❌ Failed to parse configuration file: $($_.Exception.Message)"
+            Write-Error "Failed to parse configuration file: $($_.Exception.Message)"
             return $null
         }
     }
@@ -280,7 +280,7 @@ function Get-AccessToken {
         return $response.access_token
     }
     catch {
-        Write-Error "❌ Authentication failed: $($_.Exception.Message)"
+        Write-Error "Authentication failed: $($_.Exception.Message)"
         if ($_.Exception.Response) {
             $errorContent = if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
                 $_.ErrorDetails.Message
@@ -318,15 +318,15 @@ function Get-DelegatedAccessToken {
         }
     }
     catch {
-        Write-Error "❌ Device code request failed: $($_.Exception.Message)"
+        Write-Error "Device code request failed: $($_.Exception.Message)"
         throw
     }
 
     # Step 2 — instruct the user
     Write-Host ""
-    Write-Host "═══════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host ("=" * 55) -ForegroundColor Cyan
     Write-Host "  Sign-in required" -ForegroundColor Yellow
-    Write-Host "═══════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host ("=" * 55) -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  1. Open a browser and go to:" -ForegroundColor White
     Write-Host "     $($dcResponse.verification_uri)" -ForegroundColor Cyan
@@ -337,7 +337,7 @@ function Get-DelegatedAccessToken {
     Write-Host "  3. Sign in with your Microsoft 365 account." -ForegroundColor White
     Write-Host ""
     Write-Host "  Waiting for sign-in (expires in $($dcResponse.expires_in)s)..." -ForegroundColor Gray
-    Write-Host "═══════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host ("=" * 55) -ForegroundColor Cyan
     Write-Host ""
 
     # Step 3 — poll for token
@@ -391,23 +391,23 @@ function Get-DelegatedAccessToken {
                 }
                 "authorization_declined" {
                     Write-Host ""
-                    throw "❌ The user declined the sign-in request."
+                    throw "The user declined the sign-in request."
                 }
                 "expired_token" {
                     Write-Host ""
-                    throw "❌ The device code has expired. Please run the script again."
+                    throw "The device code has expired. Please run the script again."
                 }
                 default {
                     Write-Host ""
                     $detail = if ($rawError -and $rawError.error_description) { $rawError.error_description } else { $_.Exception.Message }
-                    throw "❌ Token request failed ($errorCode): $detail"
+                    throw "Token request failed ($errorCode): $detail"
                 }
             }
         }
     }
 
     Write-Host ""
-    throw "❌ Sign-in timed out. Please run the script again and complete sign-in within the time limit."
+    throw "Sign-in timed out. Please run the script again and complete sign-in within the time limit."
 }
 
 # ---------------------------------------------------------------------------
@@ -456,7 +456,7 @@ function Get-InteractiveBrowserToken {
     }
 
     if (-not $listener) {
-        throw "❌ Could not start a local HTTP listener on ports 8400–8420. Free one of those ports and try again."
+        throw "Could not start a local HTTP listener on ports 8400-8420. Free one of those ports and try again."
     }
 
     $redirectUri = "http://localhost:$port"
@@ -474,16 +474,16 @@ function Get-InteractiveBrowserToken {
     $authUrl = "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/authorize?" + ($queryParts -join '&')
 
     Write-Host ""
-    Write-Host "═══════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host ("=" * 55) -ForegroundColor Cyan
     Write-Host "  Browser sign-in" -ForegroundColor Yellow
-    Write-Host "═══════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host ("=" * 55) -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  Opening your browser for Microsoft sign-in..." -ForegroundColor White
     Write-Host "  If the browser does not open automatically, visit:" -ForegroundColor White
     Write-Host "  $authUrl" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  Waiting for sign-in (timeout: ${TimeoutSeconds}s)..." -ForegroundColor Gray
-    Write-Host "═══════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host ("=" * 55) -ForegroundColor Cyan
     Write-Host ""
 
     # --- Open the default browser (PS5.1 on Windows + PS7 cross-platform) ---
@@ -509,7 +509,7 @@ function Get-InteractiveBrowserToken {
 
     if (-not $signaled) {
         $listener.Stop()
-        throw "❌ Browser sign-in timed out after ${TimeoutSeconds} seconds. Please run the script again."
+        throw "Browser sign-in timed out after ${TimeoutSeconds} seconds. Please run the script again."
     }
 
     $context  = $listener.EndGetContext($asyncResult)
@@ -556,11 +556,11 @@ function Get-InteractiveBrowserToken {
 
     if ($authError) {
         $errDesc = $request.QueryString["error_description"]
-        throw "❌ Authorization failed: $authError — $errDesc"
+        throw "Authorization failed: $authError - $errDesc"
     }
 
     if (-not $code) {
-        throw "❌ No authorization code received from Microsoft. Ensure the redirect URI '$redirectUri' is registered on your app registration."
+        throw "No authorization code received from Microsoft. Ensure the redirect URI '$redirectUri' is registered on your app registration."
     }
 
     # --- Exchange the authorization code for an access token ---
@@ -580,7 +580,7 @@ function Get-InteractiveBrowserToken {
     }
     catch {
         $detail = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { $_.Exception.Message }
-        throw "❌ Token exchange failed: $detail"
+        throw "Token exchange failed: $detail"
     }
 }
 
@@ -633,7 +633,7 @@ function Get-ChatIdFromUrl {
         throw "Could not extract chat ID from URL:`n$decoded"
     }
     catch {
-        throw "❌ Invalid Teams URL format: $($_.Exception.Message)"
+        throw "Invalid Teams URL format: $($_.Exception.Message)"
     }
 }
 
@@ -666,7 +666,7 @@ function Invoke-MsGraphRequest {
             $errorBody = $reader.ReadToEnd()
         }
 
-        Write-Error "❌ Graph API request failed: $statusCode - $errorBody"
+        Write-Error "Graph API request failed: $statusCode - $errorBody"
         throw
     }
 }
@@ -1465,7 +1465,14 @@ function Get-SecureInput {
             $value = $plainText
         }
         else {
-            $value = Read-Host $displayPrompt
+            # Use plain console input for normal text values so long pasted URLs
+            # are echoed by the terminal instead of Read-Host's line editor.
+            Write-Host $displayPrompt
+            [Console]::Write("> ")
+            $value = [Console]::ReadLine()
+            if ($null -eq $value) {
+                $value = ""
+            }
         }
 
         if ([string]::IsNullOrWhiteSpace($value)) {
@@ -1584,7 +1591,7 @@ function Start-InteractiveMode {
 
     $savedTeamsUrl = if (-not [string]::IsNullOrWhiteSpace($TeamsUrl)) { $TeamsUrl } else { $null }
 
-    Write-Host "`nThis guided mode uses delegated authentication — no client secret required." -ForegroundColor Gray
+    Write-Host "`nThis guided mode uses delegated authentication - no client secret required." -ForegroundColor Gray
     Write-Host "You will sign in with your Microsoft 365 account." -ForegroundColor Gray
 
     # --- Choose sign-in method (skip prompt when -BrowserAuth was passed explicitly) ---
@@ -1596,8 +1603,8 @@ function Start-InteractiveMode {
         Write-Host "  is blocked by your organisation's Conditional Access policies." -ForegroundColor Gray
         Write-Host ""
         $authMethodChoice = Get-ChoiceInput -Prompt "Sign-in method" -DefaultKey "1" -Options @(
-            @{ Key = "1"; Label = "Device code  — display a short code to enter in your browser"; Value = "DeviceCode" },
-            @{ Key = "2"; Label = "Browser      — open a sign-in window directly in your browser"; Value = "Browser" }
+            @{ Key = "1"; Label = "Device code  - display a short code to enter in your browser"; Value = "DeviceCode" },
+            @{ Key = "2"; Label = "Browser      - open a sign-in window directly in your browser"; Value = "Browser" }
         )
         $script:UseBrowserAuth = ($authMethodChoice -eq "Browser")
     }
@@ -1608,7 +1615,7 @@ function Start-InteractiveMode {
     # Using 'common' lets Microsoft route the sign-in to the correct tenant automatically;
     # the real tenant ID is then extracted from the returned access token.
     $tenantIdDefault = if (-not [string]::IsNullOrWhiteSpace($savedTenantId)) { $savedTenantId } else { $script:CommonTenantEndpoint }
-    Write-Host "  (Leave blank or press Enter to use 'common' — tenant ID will be detected from your session)" -ForegroundColor Gray
+    Write-Host "  (Leave blank or press Enter to use 'common' - tenant ID will be detected from your session)" -ForegroundColor Gray
     $script:TenantId = Get-SecureInput "Tenant ID" -DefaultValue $tenantIdDefault
 
     # Client ID (default = well-known MS Graph Command Line Tools app)
@@ -1657,7 +1664,7 @@ function Start-InteractiveMode {
 
     $script:OutputPath = Resolve-OutputPath (Get-SecureInput "Output directory" -DefaultValue $OutputPath)
 
-    $authMethodLabel  = if ($script:UseBrowserAuth) { "Delegated — browser sign-in (PKCE)" } else { "Delegated — device code flow" }
+    $authMethodLabel  = if ($script:UseBrowserAuth) { "Delegated - browser sign-in (PKCE)" } else { "Delegated - device code flow" }
     Write-Host "`n📝 Summary" -ForegroundColor Yellow
     Write-Host "Auth mode     : $authMethodLabel"
     Write-Host "Tenant ID     : $script:TenantId"
@@ -1721,7 +1728,7 @@ function Start-TeamsExport {
     # Validate required parameters
     if ($useAppOnly) {
         if (-not $script:TenantId -or -not $script:ClientId -or -not $script:ClientSecret) {
-            Write-Error "❌ App-only mode requires TenantId, ClientId, and ClientSecret."
+            Write-Error "App-only mode requires TenantId, ClientId, and ClientSecret."
             Write-Host "`n💡 Tips:" -ForegroundColor Yellow
             Write-Host "   - Run with -Interactive for delegated sign-in (no secret needed)"
             Write-Host "   - Run with -ConfigFile to create a configuration template"
@@ -1819,7 +1826,7 @@ function Start-TeamsExport {
         }
     }
     catch {
-        Write-Error "❌ Export failed: $($_.Exception.Message)"
+        Write-Error "Export failed: $($_.Exception.Message)"
         Write-Host "`n🔧 Troubleshooting tips:" -ForegroundColor Yellow
         Write-Host "- Delegated mode: ensure you signed in with an account that has access to this chat"
         Write-Host "- Delegated mode: verify Chat.Read is consented for the app (ClientId)"
@@ -1834,30 +1841,9 @@ function Start-TeamsExport {
 # Script entry point
 # ---------------------------------------------------------------------------
 
-Write-Host @"
-
- ████████╗███████╗ █████╗ ███╗   ███╗███████╗
- ╚══██╔══╝██╔════╝██╔══██╗████╗ ████║██╔════╝
-    ██║   █████╗  ███████║██╔████╔██║███████╗
-    ██║   ██╔══╝  ██╔══██║██║╚██╔╝██║╚════██║
-    ██║   ███████╗██║  ██║██║ ╚═╝ ██║███████║
-    ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝
-                                              
-   ██████╗██╗  ██╗ █████╗ ████████╗           
-  ██╔════╝██║  ██║██╔══██╗╚══██╔══╝           
-  ██║     ███████║███████║   ██║              
-  ██║     ██╔══██║██╔══██║   ██║              
-  ╚██████╗██║  ██║██║  ██║   ██║              
-   ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝              
-                                              
-  ███████╗██╗  ██╗██████╗  ██████╗ ██████╗ ████████╗███████╗██████╗ 
-  ██╔════╝╚██╗██╔╝██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔════╝██╔══██╗
-  █████╗   ╚███╔╝ ██████╔╝██║   ██║██████╔╝   ██║   █████╗  ██████╔╝
-  ██╔══╝   ██╔██╗ ██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══╝  ██╔══██╗
-  ███████╗██╔╝ ██╗██║     ╚██████╔╝██║  ██║   ██║   ███████╗██║  ██║
-  ╚══════╝╚═╝  ╚═╝╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝
-
-"@ -ForegroundColor Magenta
+Write-Host "" 
+Write-Host "Microsoft Teams Chat Exporter" -ForegroundColor Magenta
+Write-Host ("=" * 30) -ForegroundColor Magenta
 
 # Display help if no parameters were supplied
 if (-not $PSBoundParameters.Count -and -not $Interactive) {
@@ -1867,16 +1853,16 @@ if (-not $PSBoundParameters.Count -and -not $Interactive) {
 1. 🔧 Create configuration file:
    .\Export-TeamsChat.ps1 -ConfigFile
 
-2. 🖱️ Interactive mode — guided delegated sign-in (choose device code or browser):
+2. 🖱️ Interactive mode - guided delegated sign-in (choose device code or browser):
    .\Export-TeamsChat.ps1 -Interactive
 
-3. 🌐 Interactive mode — force browser sign-in (skips the device code prompt):
+3. 🌐 Interactive mode - force browser sign-in (skips the device code prompt):
    .\Export-TeamsChat.ps1 -Interactive -BrowserAuth
 
-4. 🔑 Delegated (device code) — non-interactive:
+4. 🔑 Delegated (device code) - non-interactive:
    .\Export-TeamsChat.ps1 -TenantId "your-tenant-id" -TeamsUrl "https://teams.microsoft.com/l/chat/..."
 
-5. 🌐 Delegated (browser sign-in) — non-interactive:
+5. 🌐 Delegated (browser sign-in) - non-interactive:
    .\Export-TeamsChat.ps1 -TenantId "your-tenant-id" -BrowserAuth -TeamsUrl "https://teams.microsoft.com/l/chat/..."
 
 6. 🏢 App-only (client credentials):
@@ -1901,14 +1887,14 @@ if (-not $PSBoundParameters.Count -and -not $Interactive) {
    -Delegated      : Force delegated auth in non-interactive mode
 
 🔐 AUTH MODES:
-   Delegated  — Default for -Interactive and when no ClientSecret is given.
+   Delegated  - Default for -Interactive and when no ClientSecret is given.
                 Signs in as a user. Requires only TenantId (+ClientId optional).
                 Uses Chat.Read delegated scope (no admin consent required in most tenants).
                 Two flows available:
-                  • Device code  — display a code to enter in the browser (default)
-                  • Browser PKCE — opens a browser window directly (-BrowserAuth)
+                  * Device code  - display a code to enter in the browser (default)
+                  * Browser PKCE - opens a browser window directly (-BrowserAuth)
                     Use this if device code flow is blocked by Conditional Access.
-   App-only   — Used when ClientSecret is provided.
+   App-only   - Used when ClientSecret is provided.
                 Uses client credentials flow. Requires Chat.Read.All with admin consent.
 
 "@ -ForegroundColor White
