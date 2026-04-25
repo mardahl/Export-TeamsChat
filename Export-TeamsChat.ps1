@@ -3,20 +3,30 @@
 Exports Microsoft Teams chat conversations to TXT, JSON, HTML, or CSV using the Microsoft Graph API.
 
 .DESCRIPTION
-Retrieves chat metadata, members, and messages for a specified Microsoft Teams chat (provided as a Teams chat URL) using Microsoft Graph (v1.0) and exports them in the chosen format. Supports non-interactive parameter input, a guided -Interactive mode, and an optional configuration template file stored next to the script.
+Retrieves chat metadata, members, and full message history for a specified Microsoft Teams
+chat from a normal Teams deep link or message link using Microsoft Graph v1.0.
+
+Supports guided interactive use, non-interactive parameter-based runs, and config-backed
+defaults from TeamsExportConfig.json. Exports can be written as TXT, JSON, HTML, or CSV.
+
+When inline hosted images are present, the script downloads them into a sibling assets folder
+and rewrites message references to local relative paths when possible so the export remains
+useful offline. The script writes the exported file to disk and returns the full export path
+to the pipeline.
 
 Compatible with PowerShell 5.1 and PowerShell 7+.
 
 Two authentication modes are supported:
 
-  Delegated (default for -Interactive / no-params):
+  Delegated (default when ClientSecret is not supplied):
     Supports two sign-in flows — device code or interactive browser (PKCE).
-    Only requires TenantId and ClientId. No client secret is needed.
+    ClientId is optional and defaults to the Microsoft Graph Command Line Tools app.
+    No client secret is needed.
     The default ClientId is the well-known Microsoft Graph Command Line Tools app
     (14d82eec-204b-4c2f-b7e8-296a70dab67e), which has Chat.Read pre-consented
     in most tenants.
     Device code flow: displays a short code to enter at https://microsoft.com/devicelogin.
-    Browser flow (-BrowserAuth): opens a browser window for direct sign-in —
+    Browser flow (-BrowserAuth): opens a browser window for direct sign-in -
       useful when device code flow is blocked by Conditional Access policies.
 
   App-only (used when ClientSecret is supplied):
@@ -34,18 +44,19 @@ In delegated mode, defaults to the Microsoft Graph Command Line Tools app
 
 .PARAMETER ClientSecret
 A client secret for the app registration. When provided, the script uses the
-OAuth 2.0 client credentials (app-only) flow. Omit to use delegated device code flow.
+OAuth 2.0 client credentials (app-only) flow. Omit to use delegated authentication.
 
 .PARAMETER TeamsUrl
 A Microsoft Teams chat URL that contains the chat ID (for example:
-https://teams.microsoft.com/l/chat/...). The script automatically extracts the
-chat ID from the URL.
+https://teams.microsoft.com/l/chat/...). Chat links and message links are supported.
+The script automatically extracts the chat ID from the URL.
 
 .PARAMETER ExportFormat
 The output format for the export. Valid values: TXT, JSON, HTML, CSV. Default: TXT.
 
 .PARAMETER OutputPath
-Destination directory for the exported file. Default: current directory (.).
+Destination directory for the exported file. Default: current directory (.). If the
+directory does not exist, the script can create it during interactive use.
 
 .PARAMETER ConfigFile
 Creates a TeamsExportConfig.json file in the script folder with setup instructions
@@ -53,14 +64,14 @@ and placeholders for TenantId, ClientId, ClientSecret, and AuthMode.
 
 .PARAMETER Interactive
 Runs a guided interactive setup using delegated authentication.
-Only TenantId and ClientId are required — no client secret.
+Only TenantId and ClientId are used - no client secret.
 By default uses device code flow; add -BrowserAuth to use interactive browser sign-in.
 
 .PARAMETER BrowserAuth
-When combined with -Interactive or -Delegated, uses the OAuth 2.0 Authorization Code flow
-with PKCE (opens a real browser window) instead of the device code flow.
+Uses the OAuth 2.0 Authorization Code flow with PKCE (opens a real browser window)
+instead of the device code flow for delegated sign-in.
 Useful on tenants that block device code / legacy authentication.
-A local HTTP listener is started on a loopback port (8400–8420) to receive the redirect.
+A local HTTP listener is started on a loopback port (8400-8420) to receive the redirect.
 Requires the redirect URI http://localhost:<port> to be registered on the app registration,
 or use the default Microsoft Graph Command Line Tools client ID which supports loopback URIs.
 
@@ -76,14 +87,14 @@ Creates the configuration template file TeamsExportConfig.json next to the scrip
 .EXAMPLE
 PS> .\Export-TeamsChat.ps1 -Interactive
 Starts the guided mode with delegated sign-in. You will be prompted to choose between
-device code flow and interactive browser sign-in.
+device code flow and interactive browser sign-in, then confirm the export settings.
 
 .EXAMPLE
 PS> .\Export-TeamsChat.ps1 -Interactive -BrowserAuth
 Starts the guided mode and uses browser-based interactive sign-in (no device code).
 
 .EXAMPLE
-PS> .\Export-TeamsChat.ps1 -TenantId "<tenantId>" -ClientId "<clientId>" -BrowserAuth -TeamsUrl "https://teams.microsoft.com/l/chat/..."
+PS> .\Export-TeamsChat.ps1 -TenantId "<tenantId>" -ClientId "<clientId>" -Delegated -BrowserAuth -TeamsUrl "https://teams.microsoft.com/l/chat/..."
 Authenticates via interactive browser sign-in (PKCE) and exports the specified chat to TXT.
 
 .EXAMPLE
@@ -99,22 +110,28 @@ PS> .\Export-TeamsChat.ps1 -TeamsUrl "https://teams.microsoft.com/l/chat/..." -E
 Exports the specified chat to HTML in the given output directory. Auth credentials
 are read from TeamsExportConfig.json when present.
 
+.EXAMPLE
+PS> .\Export-TeamsChat.ps1 -TeamsUrl "https://teams.microsoft.com/l/chat/..." -ExportFormat JSON
+Uses values from TeamsExportConfig.json when available and exports the chat to JSON.
+
 .OUTPUTS
 String. Returns the full file path of the exported file.
 
 .REMARKS
 - Exports chat metadata, members, and messages using Microsoft Graph v1.0.
-- Supports TXT, JSON, HTML, and CSV formats. HTML preserves basic message formatting.
+- Supports TXT, JSON, HTML, and CSV formats.
 - Delegated mode uses Chat.Read (no admin consent required for most tenants).
 - App-only mode uses Chat.Read.All and requires admin consent.
 - Accepts a Teams chat deep link; the script extracts the 19:...@thread.v2 or ...@unq chat ID.
 - Handles pagination to retrieve all messages for large chats.
+- Downloads hosted inline images to a sibling assets folder and rewrites references to local paths.
+- Writes the exported file path to stdout for use in pipelines and automation.
 - Compatible with PowerShell 5.1 and PowerShell 7+.
 
 .NOTES
 Author: Michael Mardahl (GitHub: https://github.com/mardahl)
 Version: 1.2.1
-Last Updated: 2026-04-24
+Last Updated: 2026-04-25
 LLM: ChatGPT 5 and Claude 4
 Work: Consultant for hire via inciro.com
 License: Prosperity Public License 3.0.0 (noncommercial + 30-day commercial trial). Commercial licensing and consulting: https://inciro.com
@@ -126,6 +143,7 @@ Requirements:
 - Browser auth (-BrowserAuth): redirect URI http://localhost:<port> must be registered on the app,
   or use the default Microsoft Graph Command Line Tools client ID
 - The script uses Microsoft Graph v1.0 at https://graph.microsoft.com/v1.0
+- File attachments are not downloaded; hosted inline images are localized when available
 Config file path: $PSScriptRoot\TeamsExportConfig.json
 
 .LINK
