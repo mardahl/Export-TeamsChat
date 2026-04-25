@@ -942,6 +942,23 @@ function Get-SafeAssetFileName {
     return $resolvedName
 }
 
+function Get-SafeAssetBaseName {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return "asset"
+    }
+
+    $safeValue = [regex]::Replace($Value, '[^A-Za-z0-9._-]+', '-')
+    $safeValue = $safeValue.Trim('-', '.', ' ')
+
+    if ([string]::IsNullOrWhiteSpace($safeValue)) {
+        return "asset"
+    }
+
+    return $safeValue
+}
+
 function Invoke-DownloadRequest {
     param(
         [string]$Uri,
@@ -995,7 +1012,8 @@ function Save-GraphHostedContentAsset {
         [string]$AccessToken,
         [string]$AssetsPath,
         [string]$RelativeAssetsPath,
-        [string]$PreferredFileName
+        [string]$PreferredFileName,
+        [string]$FallbackFileBaseName
     )
 
     if (-not (Test-Path $AssetsPath)) {
@@ -1017,7 +1035,8 @@ function Save-GraphHostedContentAsset {
         } else {
             Get-ExtensionFromUrlPath -Uri $uri -DefaultExtension ".bin"
         }
-        $fileName = Get-SafeAssetFileName -PreferredName $PreferredFileName -FallbackBaseName $HostedContentId -Extension $extension -AssetsPath $AssetsPath
+        $fallbackBaseName = if ([string]::IsNullOrWhiteSpace($FallbackFileBaseName)) { $HostedContentId } else { $FallbackFileBaseName }
+        $fileName = Get-SafeAssetFileName -PreferredName $PreferredFileName -FallbackBaseName $fallbackBaseName -Extension $extension -AssetsPath $AssetsPath
         $finalPath = Join-Path $AssetsPath $fileName
 
         Move-Item -Path $temporaryFilePath -Destination $finalPath -Force
@@ -1080,6 +1099,8 @@ function Update-MessageAssets {
         }
 
         $messageContent = if ($null -ne $message.body.content) { [string]$message.body.content } else { "" }
+        $hostedContentSequence = 0
+        $safeMessageId = Get-SafeAssetBaseName -Value ([string]$message.id)
 
         if (-not [string]::IsNullOrWhiteSpace($messageContent)) {
             $hostedContentMatches = [regex]::Matches(
@@ -1096,8 +1117,9 @@ function Update-MessageAssets {
                 }
 
                 if (-not $downloadedHostedContent.ContainsKey($hostedContentId)) {
-                    $preferredFileName = Get-PreferredFileNameFromHtmlReference -HtmlSnippet $match.Value
-                    $downloadResult = Save-GraphHostedContentAsset -ChatId $ChatId -MessageId $message.id -HostedContentId $hostedContentId -AccessToken $AccessToken -AssetsPath $assetDirectoryInfo.Directory -RelativeAssetsPath $assetDirectoryInfo.RelativeDirectory -PreferredFileName $preferredFileName
+                    $hostedContentSequence++
+                    $generatedFileBaseName = "message-{0}-image-{1}" -f $safeMessageId, $hostedContentSequence
+                    $downloadResult = Save-GraphHostedContentAsset -ChatId $ChatId -MessageId $message.id -HostedContentId $hostedContentId -AccessToken $AccessToken -AssetsPath $assetDirectoryInfo.Directory -RelativeAssetsPath $assetDirectoryInfo.RelativeDirectory -PreferredFileName $generatedFileBaseName -FallbackFileBaseName $generatedFileBaseName
                     if ($downloadResult) {
                         $downloadedHostedContent[$hostedContentId] = $downloadResult.RelativePath
                     }
