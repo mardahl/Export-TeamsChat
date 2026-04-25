@@ -1115,6 +1115,17 @@ function Save-GraphHostedContentAsset {
 
         Move-Item -Path $temporaryFilePath -Destination $finalPath -Force
 
+        if ($extension -eq ".bin") {
+            $resolvedExtension = Get-ExtensionFromFileSignature -FilePath $finalPath -DefaultExtension ".bin"
+            if ($resolvedExtension -ne ".bin") {
+                $resolvedFileName = Get-SafeAssetFileName -PreferredName ([System.IO.Path]::GetFileNameWithoutExtension($fileName)) -FallbackBaseName $fallbackBaseName -Extension $resolvedExtension -AssetsPath $AssetsPath
+                $resolvedPath = Join-Path $AssetsPath $resolvedFileName
+                Move-Item -Path $finalPath -Destination $resolvedPath -Force
+                $fileName = $resolvedFileName
+                $finalPath = $resolvedPath
+            }
+        }
+
         return @{
             FilePath     = $finalPath
             RelativePath = "{0}/{1}" -f $RelativeAssetsPath, $fileName
@@ -1203,6 +1214,68 @@ function Update-MessageAssets {
                     $messageContent = $messageContent.Replace($match.Groups['url'].Value, $downloadedHostedContent[$hostedContentId])
                 }
             }
+        }
+
+        $message.body.content = $messageContent
+    }
+
+    return $Messages
+}
+
+function Repair-LocalizedAssetExtensions {
+    param(
+        [array]$Messages,
+        [string]$ExportFilePath
+    )
+
+    if (-not $Messages -or [string]::IsNullOrWhiteSpace($ExportFilePath)) {
+        return $Messages
+    }
+
+    $assetDirectoryInfo = Get-AssetDirectoryInfo -ExportFilePath $ExportFilePath
+    if (-not (Test-Path $assetDirectoryInfo.Directory)) {
+        return $Messages
+    }
+
+    $updatedReferences = @{}
+
+    foreach ($message in $Messages) {
+        if (-not $message.body -or [string]::IsNullOrWhiteSpace($message.body.content)) {
+            continue
+        }
+
+        $messageContent = [string]$message.body.content
+        $assetReferences = Get-LocalizedAssetReferences -Message $message
+
+        foreach ($assetReference in $assetReferences) {
+            if ($updatedReferences.ContainsKey($assetReference)) {
+                $messageContent = $messageContent.Replace($assetReference, $updatedReferences[$assetReference])
+                continue
+            }
+
+            $relativeAssetPath = $assetReference -replace '^[.]/', ''
+            $absoluteAssetPath = Join-Path (Split-Path $ExportFilePath -Parent) ($relativeAssetPath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+
+            if (-not (Test-Path $absoluteAssetPath)) {
+                continue
+            }
+
+            $resolvedExtension = Get-ExtensionFromFileSignature -FilePath $absoluteAssetPath -DefaultExtension ".bin"
+            if ($resolvedExtension -eq ".bin") {
+                continue
+            }
+
+            $currentFileName = [System.IO.Path]::GetFileName($absoluteAssetPath)
+            $resolvedFileName = Get-SafeAssetFileName -PreferredName ([System.IO.Path]::GetFileNameWithoutExtension($currentFileName)) -FallbackBaseName ([System.IO.Path]::GetFileNameWithoutExtension($currentFileName)) -Extension $resolvedExtension -AssetsPath $assetDirectoryInfo.Directory
+            $resolvedAssetPath = Join-Path $assetDirectoryInfo.Directory $resolvedFileName
+
+            if ($absoluteAssetPath -ne $resolvedAssetPath) {
+                Move-Item -Path $absoluteAssetPath -Destination $resolvedAssetPath -Force
+            }
+
+            $updatedReference = "{0}/{1}" -f $assetDirectoryInfo.RelativeDirectory, $resolvedFileName
+            $updatedReferences[$assetReference] = $updatedReference
+            $messageContent = $messageContent.Replace($assetReference, $updatedReference)
         }
 
         $message.body.content = $messageContent
@@ -1914,6 +1987,7 @@ function Start-TeamsExport {
 
         Write-Host "`n📎 Downloading inline images and attachments..." -ForegroundColor Cyan
         $messages = Update-MessageAssets -Messages $messages -ChatId $chatId -AccessToken $accessToken -ExportFilePath $exportFilePath
+        $messages = Repair-LocalizedAssetExtensions -Messages $messages -ExportFilePath $exportFilePath
 
         # Export based on format
         Write-Host "`n📤 Exporting to $script:ExportFormat format..." -ForegroundColor Cyan
