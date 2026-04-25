@@ -886,6 +886,72 @@ function Get-ExtensionFromUrlPath {
     return $DefaultExtension
 }
 
+function Get-ExtensionFromFileSignature {
+    param(
+        [string]$FilePath,
+        [string]$DefaultExtension = ".bin"
+    )
+
+    if ([string]::IsNullOrWhiteSpace($FilePath) -or -not (Test-Path $FilePath)) {
+        return $DefaultExtension
+    }
+
+    try {
+        $stream = [System.IO.File]::OpenRead($FilePath)
+        try {
+            $buffer = New-Object byte[] 64
+            $bytesRead = $stream.Read($buffer, 0, $buffer.Length)
+        }
+        finally {
+            $stream.Dispose()
+        }
+
+        if ($bytesRead -ge 8 -and $buffer[0] -eq 0x89 -and $buffer[1] -eq 0x50 -and $buffer[2] -eq 0x4E -and $buffer[3] -eq 0x47 -and $buffer[4] -eq 0x0D -and $buffer[5] -eq 0x0A -and $buffer[6] -eq 0x1A -and $buffer[7] -eq 0x0A) {
+            return ".png"
+        }
+
+        if ($bytesRead -ge 3 -and $buffer[0] -eq 0xFF -and $buffer[1] -eq 0xD8 -and $buffer[2] -eq 0xFF) {
+            return ".jpg"
+        }
+
+        if ($bytesRead -ge 6) {
+            $headerText = [System.Text.Encoding]::ASCII.GetString($buffer, 0, [Math]::Min($bytesRead, 16))
+            if ($headerText.StartsWith("GIF87a") -or $headerText.StartsWith("GIF89a")) {
+                return ".gif"
+            }
+        }
+
+        if ($bytesRead -ge 12) {
+            $riffHeader = [System.Text.Encoding]::ASCII.GetString($buffer, 0, 4)
+            $webpHeader = [System.Text.Encoding]::ASCII.GetString($buffer, 8, 4)
+            if ($riffHeader -eq "RIFF" -and $webpHeader -eq "WEBP") {
+                return ".webp"
+            }
+        }
+
+        if ($bytesRead -ge 2 -and $buffer[0] -eq 0x42 -and $buffer[1] -eq 0x4D) {
+            return ".bmp"
+        }
+
+        if ($bytesRead -ge 4) {
+            if (($buffer[0] -eq 0x49 -and $buffer[1] -eq 0x49 -and $buffer[2] -eq 0x2A -and $buffer[3] -eq 0x00) -or
+                ($buffer[0] -eq 0x4D -and $buffer[1] -eq 0x4D -and $buffer[2] -eq 0x00 -and $buffer[3] -eq 0x2A)) {
+                return ".tif"
+            }
+        }
+
+        if ($bytesRead -ge 5) {
+            $textHeader = [System.Text.Encoding]::UTF8.GetString($buffer, 0, [Math]::Min($bytesRead, 64)).TrimStart()
+            if ($textHeader.StartsWith("<svg", [System.StringComparison]::OrdinalIgnoreCase) -or $textHeader.StartsWith("<?xml", [System.StringComparison]::OrdinalIgnoreCase)) {
+                return ".svg"
+            }
+        }
+    }
+    catch { }
+
+    return $DefaultExtension
+}
+
 function Get-SafeAssetFileName {
     param(
         [string]$PreferredName,
@@ -1030,10 +1096,18 @@ function Save-GraphHostedContentAsset {
             $contentType = $response.Headers['Content-Type']
         }
 
-        $extension = if (-not [string]::IsNullOrWhiteSpace($contentType)) {
-            Get-ExtensionFromMimeType -MimeType $contentType
-        } else {
-            Get-ExtensionFromUrlPath -Uri $uri -DefaultExtension ".bin"
+        $extension = ".bin"
+        if (-not [string]::IsNullOrWhiteSpace($contentType)) {
+            $extension = Get-ExtensionFromMimeType -MimeType $contentType
+        }
+
+        if ($extension -eq ".bin") {
+            $signatureExtension = Get-ExtensionFromFileSignature -FilePath $temporaryFilePath -DefaultExtension ".bin"
+            if ($signatureExtension -ne ".bin") {
+                $extension = $signatureExtension
+            } else {
+                $extension = Get-ExtensionFromUrlPath -Uri $uri -DefaultExtension ".bin"
+            }
         }
         $fallbackBaseName = if ([string]::IsNullOrWhiteSpace($FallbackFileBaseName)) { $HostedContentId } else { $FallbackFileBaseName }
         $fileName = Get-SafeAssetFileName -PreferredName $PreferredFileName -FallbackBaseName $fallbackBaseName -Extension $extension -AssetsPath $AssetsPath
