@@ -1,6 +1,6 @@
 # Export-TeamsChat.ps1
 
-[![License](https://img.shields.io/github/license/mardahl/Export-TeamsChat)](LICENSE)
+[![License](https://img.shields.io/badge/license-Prosperity%203.0-blue)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/mardahl/Export-TeamsChat)](https://github.com/mardahl/Export-TeamsChat/commits/main)
 [![Repo Size](https://img.shields.io/github/repo-size/mardahl/Export-TeamsChat)](https://github.com/mardahl/Export-TeamsChat)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B%20%7C%207%2B-5391FE?logo=powershell&logoColor=white)](https://learn.microsoft.com/powershell/)
